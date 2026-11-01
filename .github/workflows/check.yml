@@ -41,16 +41,18 @@ jobs:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    env:
-      OFFLINE_DIR: ${{ runner.temp }}/offline
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - run: bash tests/cli.sh offline-prefetch
+        env:
+          OFFLINE_DIR: ${{ runner.temp }}/offline
       - run: >-
           sudo unshare --net --
           sudo -u "$USER" env PATH="$PATH" HOME="$HOME" OFFLINE_DIR="$OFFLINE_DIR"
           bash tests/cli.sh offline-loop
+        env:
+          OFFLINE_DIR: ${{ runner.temp }}/offline
 
   # The rest of what needs the network or Nix itself: the everyday loop
   # with its refusals, publishing, the Nix error for a malformed lockfile,
