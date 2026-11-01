@@ -1,9 +1,11 @@
 # bun-purifier
 
-A command and a Nix library that build [bun](https://bun.sh) projects in
-the Nix sandbox from their lockfiles. It is one of the
-[nix-purifiers](https://nix-purifiers.github.io), and it meets their
-[contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
+bun-purifier keeps Bun's development workflow on locked,
+Nix-resolved dependencies. Use the normal build and test commands in your
+working tree; building the project itself in the Nix sandbox is an
+optional next step.
+
+It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
 bun still resolves the project and writes `bun.lock`, and Nix reads
 `bun.lock` itself: every package with its URL and integrity hash. Nix
@@ -13,39 +15,75 @@ cannot hold, bun-purifier writes `bun-purifier.lock.json`, and a project
 that needs none of them has no such file. Nothing generated in Nix needs
 to be committed.
 
+## Installation
+
+Install the integration into your Nix profile once:
+
+```sh
+nix profile install 'github:nix-purifiers/bun-purifier'
+```
+
+This installs the purifier CLI. The workflow below prepares the native
+tool's cache, hook or environment; follow that activation step before using
+your usual commands. The ordinary tool itself remains your normal
+installation unless the setup explicitly supplies a toolchain.
+
+`nix shell` makes an integration available temporarily instead of installing
+it. Keep using the activation steps below where a project environment or
+prefetched cache is required.
+
 ## Quickstart
 
-Lock the project in its root directory with the command below, and
-commit `bun.lock` and, if the lock wrote it, `bun-purifier.lock.json` to
-the repository. Both files lie next to `package.json`, and the builder
-finds them there.
+Install Nix, then run the following from your existing project's root.
+The setup prepares the locked dependencies and the integration that
+Bun's normal commands use:
 
 ```zsh
 nix run github:nix-purifiers/bun-purifier -- lock
+nix run github:nix-purifiers/bun-purifier -- prefetch
+bun run build
+bun test
 ```
 
-Then build the project from the same directory. The command adds no Nix
-file to the project, and `my-app` is the `name` in the `package.json`
-that you build:
+Commit the lockfiles that the lock command writes, including the build
+tool's own lockfile when it has one. Keep using the project's usual build,
+test and editor commands with this setup. Nix provides the locked
+dependencies; the development commands above run outside the Nix sandbox.
+No project Nix files are needed for this workflow.
+
+Sandboxed builds of the whole project are an optional
+[next step](#building-the-project-with-nix).
+
+## Development loop
+
+The development loop is bun's own: `bun install`, `bun run build`,
+`bun test`. Add or upgrade a dependency with `bun add`, which updates
+`bun.lock` over the network. A project without `bun-purifier.lock.json`
+needs nothing more, since Nix reads the new package from `bun.lock`. A
+project with one runs `bun-purifier lock` again. After an edit of a
+`package.json` by hand, `bun-purifier lock` brings `bun.lock` up to date
+as well.
+
+To move every dependency, or the named ones, to the newest versions
+their ranges allow, run
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.my-app'
+nix run github:nix-purifiers/bun-purifier -- update [<package>...]
 ```
 
-This uses the purifier's pinned nixpkgs, matching the lock command above.
-To build with ambient `<nixpkgs>` from your Nix search path instead,
-replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
-Both forms need no Nix files in your project. The build tool and language
-versions must match the lockfile; with ambient nixpkgs, lock with the
-purifier from that package set or pass a compatible toolchain to the builder.
+`update` runs `bun update`, which rewrites `bun.lock`, and then locks
+against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
+
+`bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
+`bun-purifier lock`, and so does the Nix build.
+
+## Building the project with Nix
+
+Once the native development workflow is working, you can also build and
+test the whole project in the Nix sandbox. For this step, keep a flake or
+another Nix build definition in the project's repository, or maintain an
+external packaging repository that points at its sources and lockfiles.
+The builder consumes the same lockfiles as the development workflow.
 
 The flake's `overlays.default` adds one attribute to a package set: the
 scope `bun-purifier`, which holds the builder `buildBunProject` and the
@@ -186,28 +224,29 @@ path and leave the `bun.lock` in the working tree as it is. When the file
 at that path does not exist yet, they start from the `bun.lock` in the
 working tree.
 
-## Development loop
+### One-off builds without a project Nix file
 
-The development loop is bun's own: `bun install`, `bun run build`,
-`bun test`. Add or upgrade a dependency with `bun add`, which updates
-`bun.lock` over the network. A project without `bun-purifier.lock.json`
-needs nothing more, since Nix reads the new package from `bun.lock`. A
-project with one runs `bun-purifier lock` again. After an edit of a
-`package.json` by hand, `bun-purifier lock` brings `bun.lock` up to date
-as well.
-
-To move every dependency, or the named ones, to the newest versions
-their ranges allow, run
+For an ad hoc build, the builder can also be evaluated directly from the
+project root. Replace the example package name with one from your project:
 
 ```zsh
-nix run github:nix-purifiers/bun-purifier -- update [<package>...]
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.my-app'
 ```
 
-`update` runs `bun update`, which rewrites `bun.lock`, and then locks
-against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
-
-`bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
-`bun-purifier lock`, and so does the Nix build.
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
 
 ## Working offline
 
@@ -300,6 +339,11 @@ the bun of its own package set, so `lock`, `prefetch` and `publish` agree
 with each other.
 
 ## Examples
+
+For day-to-day work on these projects, use the native-tool setup and
+commands in [Quickstart](#quickstart) and [Development loop](#development-loop).
+The Nix expressions below show optional sandboxed packaging of those
+projects.
 
 ### elysia
 
