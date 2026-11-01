@@ -126,8 +126,7 @@ The everyday loop is bun's own: `bun install`, `bun run build`,
 `bun test`. Add or upgrade a dependency with `bun add`, which updates
 `bun.lock` over the network. A project without `bun-purifier.lock.json`
 needs nothing more, since Nix reads the new package from `bun.lock`. A
-project with one runs `bun-purifier lock`, which takes a few seconds for
-a project of a few hundred packages.
+project with one runs `bun-purifier lock` again.
 
 To move every dependency, or the named ones, to the newest versions
 their ranges allow, run
@@ -230,23 +229,51 @@ with each other.
 
 ## Examples
 
-CI locks and builds [elysia](https://github.com/elysiajs/elysia), a bun
-web framework, at commit `e037eca`. It has 232 locked packages, and it
-locks in a few seconds. In the sandbox it installs offline, builds with
-tsup, esbuild and `tsc`, and passes its own test suite. CI also relocks
-it from a fresh checkout and checks that the lockfile comes out byte for
-byte the same.
+### elysia
 
-The tests are in `tests/`: unit tests of the lock in `tests/unit`, a
-fixture for every kind of dependency in `tests/fixtures`, broken
-lockfiles in `tests/negative`, a project with its lockfiles kept outside
-its source in `tests/external`, and the lockfile of elysia in
-`tests/real-world`. `nix flake check` runs the sandboxed checks, the
-`conformance-*` checks of the contract among them. `tests/cli.sh` runs
-what needs the network or Nix itself. It relocks every fixture, updates a
-fixture that pins an old version, runs `prefetch` and then the everyday
-loop with the network cut, publishes, and runs `nix build --rebuild`. CI
-runs both on x86_64-linux and aarch64-linux.
+[elysia](https://github.com/elysiajs/elysia) is a web framework for bun.
+In a checkout of it, lock the project:
+
+```zsh
+nix run github:nix-purifiers/bun-purifier -- lock
+```
+
+elysia has optional dependencies that only a WebAssembly fallback
+installs, so the lock writes `bun-purifier.lock.json`. Commit it next to
+`bun.lock`.
+
+Then add a `flake.nix` that builds the package and its release tarball:
+
+```nix
+{
+  inputs.bun-purifier.url = "github:nix-purifiers/bun-purifier";
+  inputs.nixpkgs.follows = "bun-purifier/nixpkgs";
+
+  outputs = { nixpkgs, bun-purifier, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+      elysia = bun-purifier.lib.bun-purifier.buildBunProject {
+        inherit pkgs;
+        src = ./.;
+        testScript = "test:types";
+      };
+    in
+    {
+      packages.${system} = {
+        default = elysia.packages.elysia;
+        tarball = elysia.release.elysia;
+      };
+      checks.${system}.types = elysia.tests;
+    };
+}
+```
+
+`nix build` builds elysia with its own `build` script, and
+`nix build '.#tarball'` makes the tarball that `bun-purifier publish`
+uploads. elysia's `test` script installs packages from npm, and the
+sandbox has no network, so the flake runs its `test:types` script, which
+type-checks the tests with `tsc`.
 
 ## Credits
 
