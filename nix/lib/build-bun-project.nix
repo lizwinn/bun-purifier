@@ -190,12 +190,24 @@ let
     passthru = { inherit lock cache; };
   };
 
+  # The file name `bun pm pack` gives a package's tarball: the name without
+  # a leading "@" and with "/" as "-", then the version.
+  packFile =
+    p: "${builtins.replaceStrings [ "/" ] [ "-" ] (lib.removePrefix "@" p.name)}-${p.version}.tgz";
+
+  # Each package holds its tarball, and its `tarball` attribute is the path
+  # of that file, known from the lockfile without building. The build fails
+  # if bun named the file otherwise.
   packages = lib.mapAttrs (
     name: p:
-    runCommand "${packDir p}-${p.version}.tgz" { passthru = { inherit project; }; } ''
-      mkdir $out
-      ln -s ${project.packs}/${packDir p}/*.tgz $out/
-    ''
+    let
+      drv = runCommand "${packDir p}-${p.version}.tgz" { passthru = { inherit project; }; } ''
+        mkdir $out
+        ln -s ${project.packs}/${packDir p}/${lib.escapeShellArg (packFile p)} $out/
+        test -e $out/${lib.escapeShellArg (packFile p)}
+      '';
+    in
+    lib.extendDerivation true { tarball = "${drv}/${packFile p}"; } drv
   ) lock.packagesByName;
 
   # The `bin` field of a package, as a set from executable name to path.
@@ -208,7 +220,19 @@ let
     else
       p.bin;
 
+  # Each program holds the executables of a package's `bin` field, and its
+  # `executables.<bin>` attribute is the path of each one.
   programs = lib.mapAttrs (
+    name: p:
+    let
+      drv = program name p;
+    in
+    lib.extendDerivation true {
+      executables = lib.mapAttrs (bin: _: "${drv}/bin/${bin}") (bins p);
+    } drv
+  ) (lib.filterAttrs (_: p: bins p != { }) lock.packagesByName);
+
+  program =
     name: p:
     runCommand "${packDir p}-${p.version}"
       {
@@ -228,8 +252,7 @@ let
             chmod +x $out/bin/${lib.escapeShellArg bin}
           '') (bins p)
         )}
-      ''
-  ) (lib.filterAttrs (_: p: bins p != { }) lock.packagesByName);
+      '';
 in
 assert
   !lock.stale

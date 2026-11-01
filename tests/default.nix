@@ -39,11 +39,12 @@ let
   # registry.
   registries = buildBunProject { src = ./fixtures/registries; };
 
-  # Runs a program and compares its output.
+  # Runs an executable, by the path its program names for it, and compares
+  # its output.
   runs =
-    name: program: expected:
+    name: executable: expected:
     pkgs.runCommand "test-${name}" { } ''
-      actual=$(${lib.getExe program})
+      actual=$(${executable})
       if [ "$actual" != ${lib.escapeShellArg expected} ]; then
         echo "expected: "${lib.escapeShellArg expected}
         echo "actual:   $actual"
@@ -53,18 +54,20 @@ let
     '';
 in
 {
-  workspace-program = runs "workspace-program" workspace.programs.fixture-app "3 is odd: true";
+  workspace-program =
+    runs "workspace-program" workspace.programs.fixture-app.executables.fixture-app
+      "3 is odd: true";
 
   sources-program =
-    runs "sources-program" sources.programs.fixture-sources
+    runs "sources-program" sources.programs.fixture-sources.executables.fixture-sources
       "plain object: true, one day: 86400000 ms";
 
   paths-program =
-    runs "paths-program" paths.programs.fixture-paths
+    runs "paths-program" paths.programs.fixture-paths.executables.fixture-paths
       "shared vendored packed plain:true";
 
   registries-program =
-    runs "registries-program" registries.programs.fixture-registries
+    runs "registries-program" registries.programs.fixture-registries.executables.fixture-registries
       "number: true";
 
   # `bun publish` sends the tarball Nix packed, as `bun-purifier publish`
@@ -82,7 +85,7 @@ in
       }
       ''
         export HOME=$TMPDIR
-        tarball=$(echo ${workspace.packages.fixture-app}/*.tgz)
+        tarball=${workspace.packages.fixture-app.tarball}
         bun ${./registry.ts} 4873 request.json &
         for i in $(seq 50); do
           (exec 3<>/dev/tcp/127.0.0.1/4873) 2>/dev/null && break
@@ -117,13 +120,13 @@ in
         ];
       }
       ''
-        tar -xzf ${workspace.packages.fixture-app}/*.tgz package/package.json
+        tar -xzf ${workspace.packages.fixture-app.tarball} package/package.json
         dep=$(jq -r '.dependencies."@fixture/lib"' package/package.json)
         if [ "$dep" != "0.1.0" ]; then
           echo "@fixture/lib is \"$dep\" in the packed package.json"
           exit 1
         fi
-        test -f ${workspace.packages."@fixture/lib"}/*.tgz
+        test -f ${workspace.packages."@fixture/lib".tarball}
         touch $out
       '';
 

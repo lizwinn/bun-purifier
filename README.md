@@ -95,9 +95,16 @@ builder:
   every package that has one. Workspaces build in the order of their
   dependencies.
 - `packages.<name>`: the tarball of package `<name>`, as `bun pm pack`
-  makes it.
+  makes it. `packages.<name>.tarball` is the path of the file.
 - `programs.<name>`: the executables of package `<name>`'s `bin` field,
-  run by bun from `project`.
+  run by bun from `project`. `programs.<name>.executables.<bin>` is the
+  path of each one.
+
+Nix knows every one of these outputs, by name, at evaluation time. The
+lockfile lists the project's packages with their names, versions,
+directories and `bin` fields, which `bun-purifier lock` takes from the
+package manifests, and Nix reads the lockfile as JSON. Nothing is built
+to find out what the project produces.
 
 `nix/lib/build-bun-project.nix` documents the arguments:
 
