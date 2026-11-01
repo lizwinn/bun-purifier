@@ -228,24 +228,14 @@ another minor version prints a warning. The `bun-purifier` command runs
 the bun of its own package set, so `lock`, `prefetch` and `publish` agree
 with each other.
 
-## Real-world projects
+## Examples
 
-- [elysia](https://github.com/elysiajs/elysia) at `e037eca`, a bun web
-  framework with 232 locked packages and a `bun.lock` in format version 1.
-  It locks in a few seconds. In the sandbox it installs offline, builds
-  with tsup, esbuild and `tsc`, type-checks its tests with `tsc`, and
-  passes its own 1616-test suite. `nix flake check` builds it, and CI
-  relocks it from a fresh checkout and compares the lockfile byte for
-  byte.
-
-elysia found three bugs, all fixed:
-
-- Packages that only a WebAssembly fallback needs, which bun installs on
-  no system the nix-purifiers build for, made the lock fail.
-- Two `bun.lock` keys for the same package version wrote the same cache
-  entry twice.
-- `#!/usr/bin/env node` scripts in `node_modules` did not run in the
-  sandbox.
+CI locks and builds [elysia](https://github.com/elysiajs/elysia), a bun
+web framework, at commit `e037eca`. It has 232 locked packages, and it
+locks in a few seconds. In the sandbox it installs offline, builds with
+tsup, esbuild and `tsc`, and passes its own test suite. CI also relocks
+it from a fresh checkout and checks that the lockfile comes out byte for
+byte the same.
 
 The tests are in `tests/`: unit tests of the lock in `tests/unit`, a
 fixture for every kind of dependency in `tests/fixtures`, broken
