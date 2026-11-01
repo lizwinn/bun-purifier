@@ -1,0 +1,8 @@
+{
+  "name": "fixture-external",
+  "version": "1.0.0",
+  "bin": { "fixture-external": "main.js" },
+  "dependencies": {
+    "kleur": "4.1.5"
+  }
+}

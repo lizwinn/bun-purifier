@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: MIT
 #
 # The flake's checks. Every one builds in the sandbox; the only network
-# access is the fixed-output fetches of locked packages.
+# access is the fixed-output fetches of locked packages. The checks named
+# `conformance-*` are those of the nix-purifiers contract.
 {
   pkgs,
-  # The flake's default package overlay, which adds buildBunProject.
-  overlay,
+  # The builder, as the flake publishes it: lib.bun-purifier.buildBunProject.
+  buildBunProject,
+  # The bun-purifier command.
   bun-purifier,
   # The sources of the real-world projects, pinned in
   # tests/dependencies/flake.lock.
@@ -14,65 +16,55 @@
 let
   inherit (pkgs) lib;
 
-  # Every fixture builds the way a consumer's package does: through
-  # buildBunProject of a package set the overlay applies to.
-  withOverlay = pkgs.extend overlay;
-  inherit (withOverlay) buildBunProject;
+  build = args: buildBunProject ({ inherit pkgs; } // args);
+  cli = lib.getExe bun-purifier;
 
-  # A workspace of two packages: a library with registry dependencies
-  # (one scoped), and an app that depends on it through `workspace:*` and
-  # bundles itself with `bun build`.
-  workspace = buildBunProject { src = ./fixtures/workspace; };
+  # A workspace of two packages: a library with registry dependencies (one
+  # scoped) and a test, and an app that depends on it through
+  # `workspace:*` and bundles itself with `bun build`.
+  workspace = build { src = ./fixtures/workspace; };
 
   # A single package with a GitHub dependency, a tarball URL dependency,
   # and esbuild, whose native binary comes from the optional dependency
   # for the build platform.
-  sources = buildBunProject { src = ./fixtures/sources; };
+  sources = build { src = ./fixtures/sources; };
 
   # Local dependencies and a git dependency: a file: directory inside the
   # project, one outside it (so `src` is the directory above the project),
   # a local tarball, and a git+ssh: repository, which Nix fetches over
   # HTTPS.
-  paths = buildBunProject {
+  paths = build {
     src = ./fixtures/paths;
     root = "app";
   };
 
   # Packages from the default registry an .npmrc names and from a scoped
   # registry.
-  registries = buildBunProject { src = ./fixtures/registries; };
+  registries = build { src = ./fixtures/registries; };
+
+  # A project whose source holds neither bun.lock nor a bun-purifier
+  # lockfile: a packaging flake keeps both beside it.
+  external = build {
+    src = ./external/src;
+    lockFile = ./external/bun-purifier.lock.json;
+    bunLock = ./external/bun.lock;
+  };
 
   # Elysia, a bun web framework, at a pinned commit. Its build bundles with
   # tsup and esbuild and writes type declarations with tsc. Its `test`
-  # script also installs from npm over the network, so the check runs the
+  # script also installs from npm over the network, so `tests` runs the
   # type check of its tests, the same checking an editor's TypeScript
-  # server does, and the integration check below runs `bun test`.
-  elysia = buildBunProject {
+  # server does, and the `elysia` check below runs `bun test`.
+  elysia = build {
     src = realWorld.elysia;
     lockFile = ./real-world/elysia/bun-purifier.lock.json;
-    doCheck = true;
-    checkScript = "test:types";
+    testScript = "test:types";
   };
 
-  # Lockfiles broken the ways a developer breaks them, each a copy of the
-  # workspace fixture: a manifest changed after the lock, a hash edited by
-  # hand, a merge conflict, and an entry missing with the digest
-  # recomputed, as a bug in the lock would leave it.
-  negativeLock =
-    name:
-    import ../nix/lib/lock.nix {
-      lockFile = ./negative/${name}/bun-purifier.lock.json;
-      root = ./negative/${name};
-    };
-  expectProblem =
-    name: text:
-    lib.assertMsg (builtins.any (lib.hasInfix text) (negativeLock name).problems) "the problems of tests/negative/${name} do not mention: ${text}";
-  fails =
-    name: !(builtins.tryEval (buildBunProject { src = ./negative/${name}; }).project.drvPath).success;
-  missingEntry = buildBunProject { src = ./negative/missing-entry; };
+  # The project derivation of a build, which every package refers to.
+  projectOf = result: (lib.head (lib.attrValues result.packages)).project;
 
-  # Runs an executable, by the path its program names for it, and compares
-  # its output.
+  # Runs an executable and compares its output.
   runs =
     name: executable: expected:
     pkgs.runCommand "test-${name}" { } ''
@@ -84,25 +76,63 @@ let
       fi
       touch $out
     '';
+
+  # Lockfiles broken the ways a developer breaks them, each a copy of the
+  # workspace fixture: a manifest changed after the lock, a hash edited by
+  # hand, a merge conflict, a truncated file, and an entry missing with the
+  # digest recomputed, as a bug in the lock would leave it.
+  negativeLock =
+    name:
+    import ../nix/lib/lock.nix {
+      lockFile = ./negative/${name}/bun-purifier.lock.json;
+      root = ./negative/${name};
+    };
+  expectProblem =
+    name: text:
+    lib.assertMsg (builtins.any (lib.hasInfix text) (negativeLock name).problems) "the problems of tests/negative/${name} do not mention: ${text}";
+  buildFails = name: !(builtins.tryEval (build { src = ./negative/${name}; }).fetches).success;
+
+  # Runs a bun-purifier command in a copy of a negative fixture, expects it
+  # to fail before it needs Nix or the network, and checks that its error
+  # says `expected`.
+  commandFails =
+    name: command: expected:
+    pkgs.runCommand "test-${name}-${command}" { } ''
+      export HOME=$TMPDIR
+      cp -r ${./negative}/${name} project
+      chmod -R u+w project
+      cd project
+      if ${cli} ${command} 2> err; then
+        echo "bun-purifier ${command} succeeded on tests/negative/${name}"
+        exit 1
+      fi
+      cat err
+      grep -F -- ${lib.escapeShellArg expected} err
+      touch $out
+    '';
+
+  # Two builds of a project that differ only in a variable the build never
+  # reads, so Nix builds both.
+  rebuilt = drv: drv.overrideAttrs { BUN_PURIFIER_REBUILD = "second"; };
+  sameBuild =
+    name: drv:
+    pkgs.runCommand "test-rebuild-${name}" { nativeBuildInputs = [ pkgs.diffutils ]; } ''
+      diff -r --no-dereference ${drv} ${rebuilt drv}
+      diff -r ${drv.packs} ${(rebuilt drv).packs}
+      touch $out
+    '';
+
+  marker = name: pkgs.runCommand "test-${name}" { } "touch $out";
+
+  # A check that passes when every one of `checks` builds.
+  allOf = name: checks: pkgs.runCommand "test-${name}" { inherit checks; } "touch $out";
 in
 {
-  workspace-program =
-    runs "workspace-program" workspace.programs.fixture-app.executables.fixture-app
-      "3 is odd: true";
-
-  sources-program =
-    runs "sources-program" sources.programs.fixture-sources.executables.fixture-sources
-      "plain object: true, one day: 86400000 ms";
-
-  paths-program =
-    runs "paths-program" paths.programs.fixture-paths.executables.fixture-paths
-      "shared vendored packed plain:true";
-
   # The unit tests of the lock (tests/unit).
   unit =
     pkgs.runCommand "test-unit"
       {
-        nativeBuildInputs = [ withOverlay.bun ];
+        nativeBuildInputs = [ pkgs.bun ];
         src = lib.fileset.toSource {
           root = ../.;
           fileset = lib.fileset.unions [
@@ -118,76 +148,68 @@ in
         touch $out
       '';
 
-  # Each broken lockfile stops the build with a message that names the
-  # problem and the command that fixes it.
-  lock-problems =
-    assert expectProblem "stale" "changed since";
-    assert expectProblem "stale" "Run `bun-purifier lock`";
-    assert expectProblem "tampered" "edited after the lock";
-    assert expectProblem "tampered" "bun-purifier lock --force";
-    assert expectProblem "conflicted" "merge conflict markers";
-    assert expectProblem "conflicted" "bun-purifier lock --force";
-    assert (negativeLock "missing-entry").problems == [ ];
-    assert lib.assertMsg (lib.all fails [
-      "stale"
-      "tampered"
-      "conflicted"
-    ]) "a broken lockfile did not stop the build";
-    pkgs.runCommand "test-lock-problems" { } "touch $out";
+  workspace-program =
+    runs "workspace-program" workspace.packages.fixture-app.executables.fixture-app
+      "3 is odd: true";
+  workspace-tests = workspace.tests;
+  # The built project, which `nix build --rebuild` repeats in CI
+  # (tests/cli.sh rebuild).
+  workspace-project = projectOf workspace;
 
-  # A lockfile without a package bun needs passes the digest check, and
-  # the offline install then fails with a message that says to relock.
-  missing-entry =
-    pkgs.runCommand "test-missing-entry"
-      {
-        nativeBuildInputs = [ withOverlay.bun ];
-      }
-      ''
-        export HOME=$TMPDIR
-        cp -r ${./negative/missing-entry} project
-        chmod -R u+w project
-        cd project
-        if (${missingEntry.project.installScript}) 2> err; then
-          echo "the install succeeded without is-number"
-          exit 1
-        fi
-        cat err
-        grep 'run `bun-purifier lock --force`' err
-        touch $out
-      '';
+  sources-program =
+    runs "sources-program" sources.packages.fixture-sources.executables.fixture-sources
+      "plain object: true, one day: 86400000 ms";
 
-  # Elysia builds, type-checks, packs, and passes its own test suite.
-  elysia =
-    pkgs.runCommand "test-elysia"
+  paths-program =
+    runs "paths-program" paths.packages.fixture-paths.executables.fixture-paths
+      "shared vendored packed plain:true";
+
+  registries-program =
+    runs "registries-program" registries.packages.fixture-registries.executables.fixture-registries
+      "number: true";
+
+  # The packed app names its workspace dependency by version, as the
+  # registry needs it.
+  workspace-release =
+    pkgs.runCommand "test-workspace-release"
       {
         nativeBuildInputs = [
-          withOverlay.bun
           pkgs.gnutar
           pkgs.gzip
+          pkgs.jq
         ];
       }
       ''
-        export HOME=$TMPDIR
-        tar -tzf ${elysia.packages.elysia.tarball} | grep '^package/dist/index.mjs$' > /dev/null
-        cp -r ${elysia.project} elysia
-        chmod -R u+w elysia
-        cd elysia
-        bun test
+        tar -xzf ${workspace.release.fixture-app.tarball} package/package.json
+        dep=$(jq -r '.dependencies."@fixture/lib"' package/package.json)
+        if [ "$dep" != "0.1.0" ]; then
+          echo "@fixture/lib is \"$dep\" in the packed package.json"
+          exit 1
+        fi
+        test -f ${workspace.release."@fixture/lib".tarball}
         touch $out
       '';
 
-  registries-program =
-    runs "registries-program" registries.programs.fixture-registries.executables.fixture-registries
-      "number: true";
+  # `fetches` lists the library entries of the build, by path.
+  workspace-fetches =
+    assert lib.assertMsg (
+      map (e: e.path) workspace.fetches == [
+        "@sindresorhus/is@4.6.0@@@1"
+        "is-number@6.0.0@@@1"
+        "is-odd@3.0.1@@@1"
+        "kleur@4.1.5@@@1"
+      ]
+    ) "workspace.fetches lists other entries";
+    marker "workspace-fetches";
 
-  # `bun publish` sends the tarball Nix packed, as `bun-purifier publish`
+  # `bun publish` sends the release tarball, as `bun-purifier publish`
   # runs it, to a registry in the sandbox, which receives the package with
   # that tarball attached.
   publish =
     pkgs.runCommand "test-publish"
       {
         nativeBuildInputs = [
-          withOverlay.bun
+          pkgs.bun
           pkgs.jq
           pkgs.coreutils
           pkgs.diffutils
@@ -195,15 +217,15 @@ in
       }
       ''
         export HOME=$TMPDIR
-        tarball=${workspace.packages.fixture-app.tarball}
+        tarball=${workspace.release.fixture-app.tarball}
         bun ${./registry.ts} 4873 request.json &
         for i in $(seq 50); do
           (exec 3<>/dev/tcp/127.0.0.1/4873) 2>/dev/null && break
           sleep 0.1
         done
-        # bun publish runs in the directory of the package, as the CLI runs
-        # it, and wants the package manifest there.
-        cp ${workspace.project}/packages/app/package.json .
+        # bun publish runs in the directory of the package, as the command
+        # runs it, and wants the package manifest there.
+        cp ${projectOf workspace}/packages/app/package.json .
         chmod u+w package.json
         NPM_CONFIG_TOKEN=test bun publish "$tarball" --registry http://127.0.0.1:4873/
         wait
@@ -218,39 +240,132 @@ in
         touch $out
       '';
 
-  # The packed app names its workspace dependency by version, as the
-  # registry needs it.
-  workspace-package =
-    pkgs.runCommand "test-workspace-package"
+  # Elysia builds, type-checks its tests, packs, and passes its own test
+  # suite.
+  elysia =
+    pkgs.runCommand "test-elysia"
       {
         nativeBuildInputs = [
+          pkgs.bun
           pkgs.gnutar
           pkgs.gzip
-          pkgs.jq
         ];
+        tests = elysia.tests;
       }
       ''
-        tar -xzf ${workspace.packages.fixture-app.tarball} package/package.json
-        dep=$(jq -r '.dependencies."@fixture/lib"' package/package.json)
-        if [ "$dep" != "0.1.0" ]; then
-          echo "@fixture/lib is \"$dep\" in the packed package.json"
-          exit 1
-        fi
-        test -f ${workspace.packages."@fixture/lib".tarball}
+        export HOME=$TMPDIR
+        tar -tzf ${elysia.release.elysia.tarball} | grep '^package/dist/index.mjs$' > /dev/null
+        cp -r ${projectOf elysia} elysia
+        chmod -R u+w elysia
+        cd elysia
+        bun test
         touch $out
       '';
 
-  # `bun-purifier lock` finds the fixtures' lockfiles current without a
-  # lock run, so it computes the same digest of bun.lock and the package
-  # manifests as nix/lib/lock.nix.
-  lock-current = pkgs.runCommand "test-lock-current" { } ''
+  # A lockfile older than the project fails, in the Nix build and in the
+  # command, naming `bun-purifier lock`.
+  conformance-stale =
+    assert expectProblem "stale" "changed since";
+    assert expectProblem "stale" "Run `bun-purifier lock`";
+    assert lib.assertMsg (buildFails "stale") "a stale lockfile did not stop the build";
+    commandFails "stale" "prefetch" "Run `bun-purifier lock`";
+
+  # A lockfile with a changed hash fails, naming `bun-purifier lock --force`.
+  conformance-tampered =
+    assert expectProblem "tampered" "edited after the lock";
+    assert expectProblem "tampered" "bun-purifier lock --force";
+    assert lib.assertMsg (buildFails "tampered") "a tampered lockfile did not stop the build";
+    commandFails "tampered" "prefetch" "bun-purifier lock --force";
+
+  # A lockfile without a package bun needs passes the digest check, and
+  # the offline install then fails with a message that says to relock.
+  conformance-missing =
+    let
+      project = projectOf (build {
+        src = ./negative/missing-entry;
+      });
+    in
+    assert (negativeLock "missing-entry").problems == [ ];
+    pkgs.runCommand "test-conformance-missing" { nativeBuildInputs = [ pkgs.bun ]; } ''
+      export HOME=$TMPDIR
+      cp -r ${./negative/missing-entry} project
+      chmod -R u+w project
+      cd project
+      if (${project.installScript}) 2> err; then
+        echo "the install succeeded without is-number"
+        exit 1
+      fi
+      cat err
+      grep 'run `bun-purifier lock --force`' err
+      touch $out
+    '';
+
+  # A lockfile that is not valid fails, naming `bun-purifier lock --force`:
+  # a merge conflict in the Nix build and the command, and a truncated file
+  # in the command. A truncated file in the Nix build is a JSON error that
+  # Nix cannot catch; its context names the same command, and
+  # tests/cli.sh checks that message.
+  conformance-malformed =
+    assert expectProblem "conflicted" "merge conflict markers";
+    assert expectProblem "conflicted" "bun-purifier lock --force";
+    assert lib.assertMsg (buildFails "conflicted") "a conflicted lockfile did not stop the build";
+    allOf "conformance-malformed" [
+      (commandFails "conflicted" "prefetch" "bun-purifier lock --force")
+      (commandFails "malformed" "prefetch" "not valid JSON. Run `bun-purifier lock --force`")
+    ];
+
+  # The relock itself needs the network, and the CI job of the same name
+  # runs it (tests/cli.sh relock). Here `bun-purifier lock` finds every
+  # lockfile current, so the command and the Nix library compute the same
+  # digests of bun.lock, the manifests and the lockfile.
+  conformance-relock = pkgs.runCommand "test-conformance-relock" { } ''
     export HOME=$TMPDIR
     cp -r ${./fixtures} fixtures
-    chmod -R u+w fixtures
+    cp -r ${./external} external
+    chmod -R u+w fixtures external
     for fixture in workspace sources paths/app registries; do
-      (cd fixtures/$fixture && ${lib.getExe bun-purifier} lock) 2> out
+      (cd fixtures/$fixture && ${cli} lock) 2> out
       grep -q "is current" out || { cat out; exit 1; }
     done
+    cp external/bun.lock external/src/
+    (cd external/src && ${cli} lock --lockfile ../bun-purifier.lock.json) 2> out
+    grep -q "is current" out || { cat out; exit 1; }
     touch $out
   '';
+
+  # Two builds of the same fixtures give the same output.
+  conformance-rebuild = allOf "conformance-rebuild" [
+    (sameBuild "workspace" (projectOf workspace))
+    (sameBuild "sources" (projectOf sources))
+  ];
+
+  # After `bun-purifier prefetch`, the everyday loop works in the sandbox,
+  # which has no network: bun's own `bun install`, `bun run build`, the
+  # app, and `bun test`. The command installs from the cache Nix built
+  # (BUN_PURIFIER_CACHE), the cache `prefetch` builds with Nix outside the
+  # sandbox; tests/cli.sh runs the whole command with the network cut.
+  conformance-offline =
+    pkgs.runCommand "test-conformance-offline"
+      {
+        nativeBuildInputs = [ pkgs.bun ];
+        BUN_PURIFIER_CACHE = (projectOf workspace).cache;
+      }
+      ''
+        export HOME=$TMPDIR
+        cp -r ${./fixtures/workspace} project
+        chmod -R u+w project
+        cd project
+        ${cli} prefetch
+        bun install
+        (cd packages/app && bun run build)
+        test "$(bun packages/app/dist/main.js)" = "3 is odd: true"
+        (cd packages/lib && bun test)
+        touch $out
+      '';
+
+  # A project whose source holds no bun-purifier lockfile builds from one
+  # kept outside it, together with a bun.lock kept outside it.
+  conformance-external =
+    runs "conformance-external" external.packages.fixture-external.executables.fixture-external
+      "built from a lockfile outside its source";
 }

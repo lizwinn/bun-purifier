@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "bunVersion": "1.4.2",
+  "inputsHash": "49fce5b9d832a0c780176505a6b5fe64a83946b4d046c05b71100934fc7a7675",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-external",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-external": "main.js"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "kleur@4.1.5@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
+        "mirrors": [],
+        "stripTop": true
+      },
+      "hash": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="
+    }
+  ],
+  "contentHash": "18079775bcb87ba87e1a0fa43eb9148eb5d80f14f68e7fa4663ed9b8d585ca73"
+}

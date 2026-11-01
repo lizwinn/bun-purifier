@@ -28,7 +28,7 @@ import { basename, dirname, join, normalize, relative, resolve } from "node:path
 import { parseJsonc } from "./jsonc";
 
 // nix/lib/lock-version.nix holds the same number.
-export const LOCK_VERSION = 1;
+export const LOCK_VERSION = 2;
 export const LOCK_FILE = "bun-purifier.lock.json";
 
 const NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -75,7 +75,7 @@ export type Lock = {
   version: number;
   bunVersion: string;
   inputsHash: string;
-  artifactsHash: string;
+  contentHash: string;
   packages: LockedPackage[];
   artifacts: Artifact[];
 };
@@ -93,10 +93,11 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// The digest nix/lib/lock.nix recomputes to tell a lockfile whose
-// artifacts were edited after the lock.
-export function artifactsHash(artifacts: Artifact[]): string {
-  return createHash("sha256").update(canonicalJson(artifacts)).digest("hex");
+// The digest of a lockfile, over everything but `contentHash` itself.
+// nix/lib/lock.nix recomputes it to tell a lockfile edited after the lock.
+export function contentHash(lock: Omit<Lock, "contentHash"> | Lock): string {
+  const { contentHash: _, ...rest } = lock as Lock;
+  return createHash("sha256").update(canonicalJson(rest)).digest("hex");
 }
 
 export type BunLock = {
@@ -471,31 +472,31 @@ function observedPaths(observed: Observed): string[] {
   ];
 }
 
-// Reads the lockfile, or undefined when there is none. A lockfile that
-// cannot be used throws an error that says what to run.
-export function readLock(root: string): Lock | undefined {
-  const file = join(root, LOCK_FILE);
+// Reads the lockfile at `file`, or undefined when there is none. A
+// lockfile that cannot be used throws an error that says what to run.
+export function readLock(file: string): Lock | undefined {
   if (!existsSync(file)) return undefined;
+  const name = basename(file);
   const text = readFileSync(file, "utf8");
   if (/^<<<<<<< /m.test(text)) {
     throw new LockError(
-      `${LOCK_FILE} has merge conflict markers. Resolve the conflict in bun.lock, then run \`bun-purifier lock --force\` to rewrite ${LOCK_FILE}.`,
+      `${name} has merge conflict markers. Resolve the conflict in bun.lock, then run \`bun-purifier lock --force\` to rewrite ${name}.`,
     );
   }
   let lock: Lock;
   try {
     lock = JSON.parse(text) as Lock;
   } catch {
-    throw new LockError(`${LOCK_FILE} is not valid JSON. Run \`bun-purifier lock --force\` to rewrite it.`);
+    throw new LockError(`${name} is not valid JSON. Run \`bun-purifier lock --force\` to rewrite it.`);
   }
   if (lock.version !== LOCK_VERSION) {
     throw new LockError(
-      `${LOCK_FILE} has lock format version ${lock.version}; this bun-purifier writes version ${LOCK_VERSION}. Run \`bun-purifier lock --force\`.`,
+      `${name} has lock format version ${lock.version}; this bun-purifier writes version ${LOCK_VERSION}. Run \`bun-purifier lock --force\`.`,
     );
   }
-  if (artifactsHash(lock.artifacts ?? []) !== lock.artifactsHash) {
+  if (contentHash(lock) !== lock.contentHash) {
     throw new LockError(
-      `the packages of ${LOCK_FILE} do not match the digest \`bun-purifier lock\` recorded, so the file was edited after the lock. Run \`bun-purifier lock --force\` to rewrite it.`,
+      `the content of ${name} does not match the digest \`bun-purifier lock\` recorded, so the file was edited after the lock. Run \`bun-purifier lock --force\` to rewrite it.`,
     );
   }
   return lock;
@@ -506,26 +507,25 @@ export function isCurrent(root: string, lock: Lock | undefined): boolean {
   return inputsHash(root, lock.packages) === lock.inputsHash;
 }
 
-// Writes the lockfile, or leaves a current one alone unless `force`.
-// Returns whether it wrote.
-export function lock(root: string, options: { force?: boolean; bun: string }): boolean {
+// Writes the lockfile at `file`, or leaves a current one alone unless
+// `force`. Returns whether it wrote.
+export function lock(root: string, file: string, options: { force?: boolean; bun: string }): boolean {
   const bunLock = readBunLock(root);
   // --force rewrites a lockfile that cannot be read, which is what the
   // errors of readLock tell the user to run.
-  if (!options.force && isCurrent(root, readLock(root))) return false;
+  if (!options.force && isCurrent(root, readLock(file))) return false;
   const packages = lockedPackages(root, bunLock);
   const work = lockRun(root, bunLock, options.bun);
   try {
-    const locked = artifacts(root, bunLock, observe(join(work, "cache")));
-    const result: Lock = {
+    const content = {
       version: LOCK_VERSION,
       bunVersion: Bun.version,
       inputsHash: inputsHash(root, packages),
-      artifactsHash: artifactsHash(locked),
       packages,
-      artifacts: locked,
+      artifacts: artifacts(root, bunLock, observe(join(work, "cache"))),
     };
-    writeFileSync(join(root, LOCK_FILE), `${JSON.stringify(result, null, 2)}\n`);
+    const result: Lock = { ...content, contentHash: contentHash(content) };
+    writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
     return true;
   } finally {
     rmSync(work, { recursive: true, force: true });

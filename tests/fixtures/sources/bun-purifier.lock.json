@@ -1,8 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "bunVersion": "1.4.2",
   "inputsHash": "97cb62ab52f33735e6135e9168c08eab1f67180b1c769d6fab344dd2ac0ec781",
-  "artifactsHash": "7bf091fae3bfd7732187722d17d5e9ee797b4b179df9050997ede7fb6d061b8a",
   "packages": [
     {
       "path": "",
@@ -66,5 +65,6 @@
       },
       "hash": "sha512-BXq5mqc8ltbaN34cDqWuYKyNhX8D/Z0J1xdtdQ8UcIIIyJyz+ZMKUt58tF3SrZ85jcfN/PZYhjR5uDQAYNVbuw=="
     }
-  ]
+  ],
+  "contentHash": "d67587826f788c63beca39b2926d32ce2a4f86346796f9c58aa6883d38722992"
 }

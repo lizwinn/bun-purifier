@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "bunVersion": "1.4.2",
+  "inputsHash": "3f79638c556ce3657a2da8bce4577786a778557eeaefd03c442ca148be93120b",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-workspace",
+      "private": true
+    },
+    {
+      "path": "packages/app",
+      "name": "fixture-app",
+    

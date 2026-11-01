@@ -57,7 +57,7 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              overlay = self.overlays.default;
+              inherit (self.lib.bun-purifier) buildBunProject;
               inherit (self.packages.${system}) bun-purifier;
               realWorld = { inherit (inputs) elysia; };
             };

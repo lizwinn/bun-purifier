@@ -15,8 +15,8 @@ import {
   LOCK_VERSION,
   LockError,
   artifacts,
-  artifactsHash,
   cacheHost,
+  contentHash,
   canonicalJson,
   defaultRegistry,
   gitFetchUrl,
@@ -235,38 +235,45 @@ describe("digests", () => {
 describe("readLock", () => {
   function lockfile(edit: (lock: Record<string, unknown>) => void = () => {}): void {
     const artifacts = [{ path: "a@1.0.0@@@1", archive: { url: "https://x/a.tgz", mirrors: [], stripTop: true }, hash: "sha512-a" }];
-    const lock: Record<string, unknown> = {
+    const content = {
       version: LOCK_VERSION,
       bunVersion: Bun.version,
       inputsHash: "",
-      artifactsHash: artifactsHash(artifacts as never),
       packages: [],
       artifacts,
     };
+    const lock: Record<string, unknown> = { ...content, contentHash: contentHash(content as never) };
     edit(lock);
     write(LOCK_FILE, JSON.stringify(lock, null, 2));
   }
 
+  const file = () => join(dir, LOCK_FILE);
+
   test("reads a lockfile", () => {
     lockfile();
-    expect(readLock(dir)?.artifacts.length).toBe(1);
+    expect(readLock(file())?.artifacts.length).toBe(1);
   });
-  test("returns nothing without a lockfile", () => expect(readLock(dir)).toBeUndefined());
+  test("returns nothing without a lockfile", () => expect(readLock(file())).toBeUndefined());
   test("names a merge conflict", () => {
     write(LOCK_FILE, '{\n<<<<<<< ours\n"a": 1\n=======\n"a": 2\n>>>>>>> theirs\n}\n');
-    expect(() => readLock(dir)).toThrow(/merge conflict markers.*bun-purifier lock --force/);
+    expect(() => readLock(file())).toThrow(/merge conflict markers.*bun-purifier lock --force/);
   });
   test("names malformed JSON", () => {
     write(LOCK_FILE, '{ "version": ');
-    expect(() => readLock(dir)).toThrow(/not valid JSON.*bun-purifier lock --force/);
+    expect(() => readLock(file())).toThrow(/not valid JSON.*bun-purifier lock --force/);
   });
   test("names another format version", () => {
     lockfile((lock) => (lock.version = 0));
-    expect(() => readLock(dir)).toThrow(/lock format version 0/);
+    expect(() => readLock(file())).toThrow(/lock format version 0/);
   });
   test("names a hand-edited hash", () => {
     lockfile((lock) => ((lock.artifacts as { hash: string }[])[0].hash = "sha512-tampered"));
-    expect(() => readLock(dir)).toThrow(LockError);
-    expect(() => readLock(dir)).toThrow(/edited after the lock.*bun-purifier lock --force/);
+    expect(() => readLock(file())).toThrow(LockError);
+    expect(() => readLock(file())).toThrow(/edited after the lock.*bun-purifier lock --force/);
+  });
+  test("reads a lockfile outside the project by its own name", () => {
+    lockfile();
+    write("elsewhere/app.lock.json", JSON.stringify(readLock(file())));
+    expect(readLock(join(dir, "elsewhere/app.lock.json"))?.artifacts.length).toBe(1);
   });
 });

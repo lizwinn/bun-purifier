@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# The checks of the bun-purifier command that need the network or Nix
-# itself, which a sandboxed check has neither of. CI runs this from the
-# repository root after `nix flake check`.
+# The checks that need the network or Nix itself, which a sandboxed check
+# has neither of. CI runs them from the repository root, each section as a
+# job or a step; with no arguments, every section runs.
 #
-#   1. The lock run: relocking every fixture with --force writes the
-#      lockfile it already has, byte for byte, and so does relocking
-#      elysia (a real project, at the commit tests/dependencies pins) from
-#      a fresh checkout.
-#   2. The interactive install: `install` sets up the workspace fixture
-#      from its lock, twice, and the app then builds and runs.
-#   3. The everyday loop: after `bun add`, `install` refuses the stale
-#      lock and names `bun-purifier lock`; after the lock, it installs.
-#      A lockfile edited by hand is refused the same way.
-#   4. Publishing: `publish` sends the tarball Nix packed to a registry
-#      that records it.
+#   relock            relocking every fixture and elysia (a real project, at
+#                     the commit tests/dependencies pins) writes the
+#                     lockfile it already has, byte for byte
+#                     (conformance-relock)
+#   offline-prefetch  `bun-purifier prefetch` in a copy of the workspace
+#                     fixture under $OFFLINE_DIR
+#   offline-loop      the everyday loop in that copy, which CI runs with
+#                     the network cut: `bun install`, `bun run build`, the
+#                     app and `bun test` (conformance-offline)
+#   loop              after `bun add`, `prefetch` refuses the stale lock
+#                     and names `bun-purifier lock`; after the lock it
+#                     installs; a lockfile edited by hand is refused
+#   publish           `publish` sends the release tarball Nix built to a
+#                     registry that records it
+#   nix-errors        a Nix build of a truncated lockfile names
+#                     `bun-purifier lock --force` (conformance-malformed)
+#   rebuild           `nix build --rebuild` of a fixture gives the same
+#                     output (conformance-rebuild)
 set -euo pipefail
+
+work=$(mktemp -d)
+trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+OFFLINE_DIR=${OFFLINE_DIR:-$work/offline}
+
+cli=$(nix build --no-link --print-out-paths '.#bun-purifier')/bin/bun-purifier
+bun=$(nix build --no-link --print-out-paths '.#bun-purifier.bun')/bin/bun
+# Package scripts call bun by name.
+PATH=$(dirname "$bun"):$PATH
 
 # Runs a command that must fail, and checks that its error output names
 # `expected`.
@@ -34,60 +50,97 @@ fails_with() {
   fi
 }
 
-cli=$(nix build --no-link --print-out-paths '.#bun-purifier')/bin/bun-purifier
-bun=$(nix build --no-link --print-out-paths '.#bun-purifier.bun')/bin/bun
-jq=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#jq.bin')/bin/jq
-# Package scripts call bun by name.
-PATH=$(dirname "$bun"):$PATH
-work=$(mktemp -d)
-trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+relock() {
+  for fixture in workspace sources paths/app registries; do
+    (cd "tests/fixtures/$fixture" && "$cli" lock --force)
+  done
+  cp tests/external/bun.lock tests/external/src/
+  (cd tests/external/src && "$cli" lock --force --lockfile ../bun-purifier.lock.json)
+  rm tests/external/src/bun.lock
+  git diff --exit-code -- tests/fixtures tests/external
 
-echo "== lock run"
-for fixture in workspace sources paths/app registries; do
-  (cd "tests/fixtures/$fixture" && "$cli" lock --force)
+  local jq rev
+  jq=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#jq.bin')/bin/jq
+  rev=$("$jq" -r .nodes.elysia.locked.rev tests/dependencies/flake.lock)
+  git clone --quiet https://github.com/elysiajs/elysia "$work/elysia"
+  git -C "$work/elysia" checkout --quiet "$rev"
+  local start
+  start=$(date +%s)
+  (cd "$work/elysia" && "$cli" lock)
+  echo "elysia relocked in $(($(date +%s) - start)) s"
+  cmp "$work/elysia/bun-purifier.lock.json" tests/real-world/elysia/bun-purifier.lock.json
+}
+
+offline_prefetch() {
+  rm -rf "$OFFLINE_DIR"
+  cp -r tests/fixtures/workspace "$OFFLINE_DIR"
+  (cd "$OFFLINE_DIR" && "$cli" prefetch)
+}
+
+offline_loop() {
+  (cd "$OFFLINE_DIR" && "$bun" install)
+  (cd "$OFFLINE_DIR/packages/app" && "$bun" run build)
+  local actual
+  actual=$("$bun" "$OFFLINE_DIR/packages/app/dist/main.js")
+  if [ "$actual" != "3 is odd: true" ]; then
+    echo "the app printed: $actual"
+    exit 1
+  fi
+  (cd "$OFFLINE_DIR/packages/lib" && "$bun" test)
+}
+
+loop() {
+  cp -r tests/fixtures/workspace "$work/loop"
+  (cd "$work/loop" && "$cli" prefetch && "$cli" prefetch)
+  (cd "$work/loop/packages/lib" && "$bun" add ms@2.1.3)
+  (cd "$work/loop" && fails_with 'Run `bun-purifier lock`' "$cli" prefetch)
+  (cd "$work/loop" && "$cli" lock && "$cli" prefetch)
+  grep -F '"url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"' "$work/loop/bun-purifier.lock.json" > /dev/null
+  sed -i 's/"hash": "sha512-W/"hash": "sha512-X/' "$work/loop/bun-purifier.lock.json"
+  (cd "$work/loop" && fails_with 'bun-purifier lock --force' "$cli" prefetch)
+}
+
+publish() {
+  cp -r tests/fixtures/workspace "$work/publish"
+  "$bun" tests/registry.ts 4873 "$work/request.json" &
+  for _ in $(seq 50); do
+    (exec 3<>/dev/tcp/127.0.0.1/4873) 2>/dev/null && break
+    sleep 0.1
+  done
+  (cd "$work/publish/packages/app" &&
+    env NPM_CONFIG_TOKEN=test "$cli" publish --registry http://127.0.0.1:4873/)
+  wait
+  local jq lib nixpkgs expected
+  jq=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#jq.bin')/bin/jq
+  lib=$(dirname "$cli")/../share/bun-purifier/nix/lib
+  nixpkgs=$(grep -o "BUN_PURIFIER_NIXPKGS='[^']*'" "$cli" | cut -d"'" -f2)
+  expected=$(nix build --no-link --print-out-paths --file "$lib/interactive.nix" \
+    --argstr nixpkgs "$nixpkgs" --argstr src "$work/publish" \
+    --argstr lockFile "$work/publish/bun-purifier.lock.json" --argstr package fixture-app release)
+  "$jq" -r '._attachments[].data' "$work/request.json" | base64 -d > "$work/sent.tgz"
+  cmp "$work/sent.tgz" "$expected"/*.tgz
+}
+
+nix_errors() {
+  local lib nixpkgs
+  lib=$(dirname "$cli")/../share/bun-purifier/nix/lib
+  nixpkgs=$(grep -o "BUN_PURIFIER_NIXPKGS='[^']*'" "$cli" | cut -d"'" -f2)
+  fails_with 'not valid JSON. Run `bun-purifier lock --force`' \
+    nix build --no-link --file "$lib/interactive.nix" --argstr nixpkgs "$nixpkgs" \
+    --argstr lockFile "$PWD/tests/negative/malformed/bun-purifier.lock.json" cache
+}
+
+rebuild() {
+  local check
+  check=".#checks.$(uname -m)-linux.workspace-project"
+  nix build --no-link "$check"
+  nix build --no-link --rebuild "$check"
+}
+
+sections=("$@")
+[ ${#sections[@]} -gt 0 ] || sections=(relock offline-prefetch offline-loop loop publish nix-errors rebuild)
+for section in "${sections[@]}"; do
+  echo "== $section"
+  "${section//-/_}"
 done
-git diff --exit-code -- tests/fixtures
-
-elysia_rev=$("$jq" -r .nodes.elysia.locked.rev tests/dependencies/flake.lock)
-git clone --quiet https://github.com/elysiajs/elysia "$work/elysia"
-git -C "$work/elysia" checkout --quiet "$elysia_rev"
-start=$(date +%s)
-(cd "$work/elysia" && "$cli" lock)
-echo "elysia relocked in $(($(date +%s) - start)) s"
-cmp "$work/elysia/bun-purifier.lock.json" tests/real-world/elysia/bun-purifier.lock.json
-
-echo "== interactive install"
-cp -r tests/fixtures/workspace "$work/workspace"
-(cd "$work/workspace" && "$cli" install && "$cli" install)
-(cd "$work/workspace/packages/app" && "$bun" run build)
-actual=$("$bun" "$work/workspace/packages/app/dist/main.js")
-if [ "$actual" != "3 is odd: true" ]; then
-  echo "the app printed: $actual"
-  exit 1
-fi
-
-echo "== everyday loop"
-cp -r tests/fixtures/workspace "$work/loop"
-(cd "$work/loop/packages/lib" && "$bun" add ms@2.1.3)
-(cd "$work/loop" && fails_with 'Run `bun-purifier lock`' "$cli" install)
-(cd "$work/loop" && "$cli" lock && "$cli" install)
-grep -F '"url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"' "$work/loop/bun-purifier.lock.json" > /dev/null
-sed -i 's/"hash": "sha512-W/"hash": "sha512-X/' "$work/loop/bun-purifier.lock.json"
-(cd "$work/loop" && fails_with 'bun-purifier lock --force' "$cli" install)
-
-echo "== publish"
-"$bun" tests/registry.ts 4873 "$work/request.json" &
-for _ in $(seq 50); do
-  (exec 3<>/dev/tcp/127.0.0.1/4873) 2>/dev/null && break
-  sleep 0.1
-done
-(cd "$work/workspace/packages/app" &&
-  env NPM_CONFIG_TOKEN=test "$cli" publish --registry http://127.0.0.1:4873/)
-wait
-expected=$(nix build --no-link --print-out-paths --file "$(nix build --no-link --print-out-paths '.#bun-purifier')/share/bun-purifier/nix/lib/interactive.nix" \
-  --argstr nixpkgs "$(grep -o "BUN_PURIFIER_NIXPKGS='[^']*'" "$cli" | cut -d"'" -f2)" \
-  --argstr src "$work/workspace" --argstr package fixture-app package)
-"$jq" -r '._attachments[].data' "$work/request.json" | base64 -d > "$work/sent.tgz"
-cmp "$work/sent.tgz" "$expected"/*.tgz
-
-echo "== all CLI checks passed"
+echo "== passed: ${sections[*]}"

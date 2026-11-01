@@ -7,7 +7,8 @@ on:
   pull_request:
 
 jobs:
-  # The flake's checks, built on each Linux system the flake supports.
+  # The flake's checks, the sandboxed conformance-* checks among them,
+  # built on each Linux system the flake supports.
   flake-check:
     strategy:
       fail-fast: false
@@ -19,8 +20,41 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix flake check -L
 
-  # The checks of the command that need the network: the lock run, the
-  # interactive install, the everyday loop and publishing (tests/cli.sh).
+  # Relocking every fixture and elysia reproduces each lockfile byte for
+  # byte. A relock needs the network, so it runs here.
+  conformance-relock:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: bash tests/cli.sh relock
+
+  # After `bun-purifier prefetch`, the everyday loop works with the network
+  # cut: the loop runs in a network namespace with no interfaces up.
+  conformance-offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      OFFLINE_DIR: ${{ runner.temp }}/offline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: bash tests/cli.sh offline-prefetch
+      - run: >-
+          sudo unshare --net --
+          sudo -u "$USER" env PATH="$PATH" HOME="$HOME" OFFLINE_DIR="$OFFLINE_DIR"
+          bash tests/cli.sh offline-loop
+
+  # The rest of what needs the network or Nix itself: the everyday loop
+  # with its refusals, publishing, the Nix error for a malformed lockfile,
+  # and `nix build --rebuild` (conformance-rebuild).
   cli:
     strategy:
       fail-fast: false
@@ -30,4 +64,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: bash tests/cli.sh
+      - run: bash tests/cli.sh loop publish nix-errors rebuild

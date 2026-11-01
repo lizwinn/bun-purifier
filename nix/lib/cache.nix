@@ -10,40 +10,31 @@
 #
 # bun writes into its cache directory, so a build copies this tree of
 # links to a writable directory first. build-bun-project.nix does that,
-# and so does the `install` command of the CLI.
-#
-# It is a package for callPackage, with the lockfile among its arguments.
+# and so does `bun-purifier prefetch`.
 {
   lib,
-  pkgs,
-  runCommand,
   # The `purifier` library namespace: `fetchEntry` and `admits`.
   purifier,
+}:
+{
+  pkgs,
   lockFile,
   # The Nix system whose packages the cache holds.
   system,
-  # Replace nixpkgs' fetchurl and fetchgit, for credentials or mirrors.
-  # Each is called with the arguments of the nixpkgs fetcher of its name.
-  fetchurl ? null,
-  fetchgit ? null,
+  # Fetchers in place of nixpkgs' own, passed to `fetchEntry` unchanged.
+  fetchers ? { },
 }:
 let
   lock = import ./lock.nix { inherit lockFile; };
 
-  fetchEntry = purifier.fetchEntry (
-    {
-      inherit pkgs;
-    }
-    // lib.optionalAttrs (fetchurl != null) { inherit fetchurl; }
-    // lib.optionalAttrs (fetchgit != null) { inherit fetchgit; }
-  );
+  fetchEntry = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
 
   # bun keeps a git dependency as the checkout of its commit, with the
   # commit in a file `.bun-tag`, and an offline install looks for that
   # file.
   withBunTag =
     artifact:
-    runCommand (lock.artifactName artifact)
+    pkgs.runCommand (lock.artifactName artifact)
       {
         src = fetchEntry artifact;
         inherit (artifact.git) rev;
@@ -57,7 +48,7 @@ let
 
   entry = artifact: if artifact ? git then withBunTag artifact else fetchEntry artifact;
 
-  # The artifacts bun installs on the system: those whose npm `os`, `cpu`
+  # The entries bun installs on the system: those whose npm `os`, `cpu`
   # and `libc` filters admit it.
   installed = builtins.filter (
     a:
@@ -71,15 +62,19 @@ in
 assert
   lock.integrityProblems == [ ] || throw (builtins.concatStringsSep "\n" lock.integrityProblems);
 # The manifest goes to the builder as a file, since a large project locks
-# thousands of artifacts and the list would not fit in an environment
+# thousands of entries and the list would not fit in an environment
 # variable.
-runCommand "bun-install-cache"
+pkgs.runCommand "bun-install-cache"
   {
     manifest = lib.concatMapStrings (a: "${a.path}\t${entry a}\n") installed;
     passAsFile = [ "manifest" ];
     preferLocalBuild = true;
     allowSubstitutes = false;
-    passthru = { inherit lock; };
+    passthru = {
+      inherit lock;
+      # The library entries the cache fetches.
+      entries = installed;
+    };
   }
   ''
     mkdir -p $out

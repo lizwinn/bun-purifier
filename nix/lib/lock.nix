@@ -8,6 +8,8 @@
   lockFile,
   # The root the lockfile's package paths are relative to.
   root ? dirOf lockFile,
+  # The project's bun.lock, which may lie outside `root`.
+  bunLock ? root + "/bun.lock",
 }:
 let
   text = builtins.readFile lockFile;
@@ -25,18 +27,22 @@ let
         version = supportedVersion;
         bunVersion = "";
         inputsHash = "";
-        artifactsHash = "";
+        contentHash = "";
         packages = [ ];
         artifacts = [ ];
       }
     else
-      builtins.fromJSON text;
+      # A parse error cannot be caught, so the context it carries names the
+      # command that rewrites the file.
+      builtins.addErrorContext
+        "bun-purifier: ${toString lockFile} is not valid JSON. Run `bun-purifier lock --force` to rewrite it."
+        (builtins.fromJSON text);
 
-  # The digest that `bun-purifier lock` records as `artifactsHash`: SHA-256
-  # of the artifacts as JSON with sorted keys and no whitespace, the way
-  # builtins.toJSON writes them. src/lock.ts computes it the same way. A
-  # lockfile whose artifacts were edited by hand no longer matches it.
-  artifactsHash = builtins.hashString "sha256" (builtins.toJSON lock.artifacts);
+  # The digest that `bun-purifier lock` records as `contentHash`: SHA-256
+  # of the rest of the lockfile as JSON with sorted keys and no whitespace,
+  # the way builtins.toJSON writes it. src/lock.ts computes it the same
+  # way. A lockfile edited by hand no longer matches it.
+  contentHash = builtins.hashString "sha256" (builtins.toJSON (removeAttrs lock [ "contentHash" ]));
 
   # A store path name from a file name. Store path names allow
   # [A-Za-z0-9+._?=-], must not start with a dot, and are at most 211
@@ -62,11 +68,20 @@ let
   # way.
   inputsHash =
     let
-      files = [ "bun.lock" ] ++ map (p: manifestPath p.path) lock.packages;
       manifestPath = path: if path == "" then "package.json" else "${path}/package.json";
+      files = [
+        {
+          name = "bun.lock";
+          file = bunLock;
+        }
+      ]
+      ++ map (p: {
+        name = manifestPath p.path;
+        file = root + "/${manifestPath p.path}";
+      }) lock.packages;
     in
     builtins.hashString "sha256" (
-      builtins.concatStringsSep "" (map (f: "${f}\n${builtins.readFile (root + "/${f}")}\n") files)
+      builtins.concatStringsSep "" (map (f: "${f.name}\n${builtins.readFile f.file}\n") files)
     );
   name = toString lockFile;
 
@@ -83,9 +98,9 @@ let
           toString (lock.version or "none")
         }; this library reads version ${toString supportedVersion}. Run `bun-purifier lock --force` with the bun-purifier that provides this library."
       ]
-    else if artifactsHash != lock.artifactsHash or null then
+    else if contentHash != lock.contentHash or null then
       [
-        "bun-purifier: the packages of ${name} do not match the digest `bun-purifier lock` recorded, so the file was edited after the lock. Run `bun-purifier lock --force` to rewrite it."
+        "bun-purifier: the content of ${name} does not match the digest `bun-purifier lock` recorded, so the file was edited after the lock. Run `bun-purifier lock --force` to rewrite it."
       ]
     else
       [ ];

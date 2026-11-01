@@ -1,8 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "bunVersion": "1.4.2",
-  "inputsHash": "c76983642cce4e600c95fdf1764c143ef730a1f8e9658a55700d4624a6cd47d8",
-  "artifactsHash": "68b9a3b6493c97e5270e24824d7f9adec8e97dad97bf8d778b4373946d810fa3",
+  "inputsHash": "3f79638c556ce3657a2da8bce4577786a778557eeaefd03c442ca148be93120b",
   "packages": [
     {
       "path": "",
@@ -23,7 +22,10 @@
     {
       "path": "packages/lib",
       "name": "@fixture/lib",
-      "version": "0.1.0"
+      "version": "0.1.0",
+      "scripts": [
+        "test"
+      ]
     }
   ],
   "artifacts": [
@@ -63,5 +65,6 @@
       },
       "hash": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="
     }
-  ]
+  ],
+  "contentHash": "387e9642c6220190b1f1d17cdc44bf24b879367aeb20a41814defa7eccc37620"
 }

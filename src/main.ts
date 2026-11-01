@@ -4,16 +4,22 @@
 //
 //   bun-purifier lock [--force]
 //     Writes bun-purifier.lock.json from bun.lock (src/lock.ts).
-//   bun-purifier install [bun install flags]
-//     Builds the locked install cache with Nix and runs an offline
-//     `bun install` from it.
+//   bun-purifier prefetch [bun install flags]
+//     Builds the locked install cache with Nix, keeps it with a GC root in
+//     node_modules/.cache/bun-purifier, and runs an offline `bun install`
+//     from it. bun's own commands then work with no network.
 //   bun-purifier publish [--package <name>] [bun publish flags]
-//     Builds the package's tarball in the Nix sandbox and runs
+//     Builds the package's release tarball in the Nix sandbox and runs
 //     `bun publish` with it.
 //
 // The Nix package (pkgs/bun-purifier) runs this file with the bun the lock
 // is made with, and sets BUN_PURIFIER_LIB to nix/lib and
 // BUN_PURIFIER_NIXPKGS to the nixpkgs the flake pins.
+//
+// When BUN_PURIFIER_CACHE names an install cache Nix already built,
+// `prefetch` installs from it and builds nothing, so it needs neither Nix
+// nor the network. The offline check of the flake runs it that way in the
+// sandbox.
 
 import {
   chmodSync,
@@ -25,13 +31,13 @@ import {
   rmSync,
   symlinkSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { isCurrent, LOCK_FILE, LockError, lock, readLock } from "./lock";
 
 const usage = `usage:
-  bun-purifier lock [--force]
-  bun-purifier install [bun install flags]
-  bun-purifier publish [--package <name>] [bun publish flags]`;
+  bun-purifier lock [--lockfile <path>] [--force]
+  bun-purifier prefetch [--lockfile <path>] [bun install flags]
+  bun-purifier publish [--lockfile <path>] [--package <name>] [bun publish flags]`;
 
 function fail(message: string): never {
   console.error(`bun-purifier: ${message}`);
@@ -76,10 +82,25 @@ function nixBuild(root: string, args: string[], outLink?: string): string {
   return result.stdout.toString().trim().split("\n")[0];
 }
 
-function requireCurrentLock(root: string): void {
-  if (!isCurrent(root, readLock(root))) {
-    fail(`${LOCK_FILE} is missing or older than bun.lock and the package manifests. Run \`bun-purifier lock\`.`);
+function requireCurrentLock(root: string, file: string): void {
+  if (!isCurrent(root, readLock(file))) {
+    fail(`${basename(file)} is missing or older than bun.lock and the package manifests. Run \`bun-purifier lock\`.`);
   }
+}
+
+// Takes `--lockfile <path>` (or `--lockfile=<path>`) out of the
+// arguments. The lockfile is bun-purifier.lock.json at the project root
+// unless it names another, such as one a packaging flake keeps outside
+// the project.
+function takeLockfile(root: string, args: string[]): [file: string, rest: string[]] {
+  let file = join(root, LOCK_FILE);
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--lockfile") file = resolve(args[++i] ?? fail("--lockfile needs a path."));
+    else if (args[i].startsWith("--lockfile=")) file = resolve(args[i].slice("--lockfile=".length));
+    else rest.push(args[i]);
+  }
+  return [file, rest];
 }
 
 // Recreates the directories of a tree of links with default permissions,
@@ -105,13 +126,15 @@ function makeRemovable(dir: string): void {
   for (const name of readdirSync(dir)) makeRemovable(join(dir, name));
 }
 
-function install(root: string, args: string[]): void {
-  requireCurrentLock(root);
+function prefetch(root: string, file: string, args: string[]): void {
+  requireCurrentLock(root, file);
   // The Nix build's result link is a GC root, so the cache stays in the
   // store while the project uses it.
   const dir = join(root, "node_modules", ".cache", "bun-purifier");
   mkdirSync(dir, { recursive: true });
-  const cache = nixBuild(root, ["--argstr", "lockFile", join(root, LOCK_FILE), "cache"], join(dir, "result"));
+  const cache =
+    process.env.BUN_PURIFIER_CACHE ||
+    nixBuild(root, ["--argstr", "lockFile", file, "cache"], join(dir, "result"));
   // bun writes into its cache directory: a writable copy of the tree of
   // links to the unpacked packages.
   const writable = join(dir, "bun-cache");
@@ -121,9 +144,9 @@ function install(root: string, args: string[]): void {
   run([process.execPath, "install", "--frozen-lockfile", "--offline", `--cache-dir=${writable}`, ...args], root);
 }
 
-function publish(root: string, args: string[]): void {
-  requireCurrentLock(root);
-  const lockfile = readLock(root)!;
+function publish(root: string, file: string, args: string[]): void {
+  requireCurrentLock(root, file);
+  const lockfile = readLock(file)!;
   let name: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -136,32 +159,44 @@ function publish(root: string, args: string[]): void {
     const path = relative(root, process.cwd());
     name =
       lockfile.packages.find((p) => p.path === path)?.name ??
-      fail(`no package of ${LOCK_FILE} is at ${path || "the project root"}; name one with --package.`);
+      fail(`no package of ${basename(file)} is at ${path || "the project root"}; name one with --package.`);
   }
   const pkg =
     lockfile.packages.find((p) => p.name === name && p.version) ??
-    fail(`${LOCK_FILE} has no package named ${name} with a version.`);
-  const out = nixBuild(root, ["--argstr", "src", root, "--argstr", "package", name!, "package"]);
+    fail(`${basename(file)} has no package named ${name} with a version.`);
+  const out = nixBuild(root, [
+    "--argstr",
+    "src",
+    root,
+    "--argstr",
+    "lockFile",
+    file,
+    "--argstr",
+    "package",
+    name!,
+    "release",
+  ]);
   const tarball = readdirSync(out).find((f) => f.endsWith(".tgz")) ?? fail(`the build of ${name} made no tarball.`);
   // bun publish runs in the directory of the package, so it reads the
   // registry configuration there, as it does for a package it packs.
   run([process.execPath, "publish", join(out, tarball), ...rest], join(root, pkg.path));
 }
 
-const [command, ...args] = process.argv.slice(2);
+const [command, ...argv] = process.argv.slice(2);
 try {
-  const root = command === undefined ? "" : findRoot();
+  const root = command === undefined || command === "--help" ? "" : findRoot();
+  const [file, args] = takeLockfile(root, argv);
   switch (command) {
     case "lock": {
-      const wrote = lock(root, { force: args.includes("--force"), bun: process.execPath });
-      console.error(wrote ? `bun-purifier: wrote ${resolve(root, LOCK_FILE)}` : `bun-purifier: ${LOCK_FILE} is current.`);
+      const wrote = lock(root, file, { force: args.includes("--force"), bun: process.execPath });
+      console.error(wrote ? `bun-purifier: wrote ${file}` : `bun-purifier: ${basename(file)} is current.`);
       break;
     }
-    case "install":
-      install(root, args);
+    case "prefetch":
+      prefetch(root, file, args);
       break;
     case "publish":
-      publish(root, args);
+      publish(root, file, args);
       break;
     default:
       console.error(usage);
