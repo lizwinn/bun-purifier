@@ -24,16 +24,28 @@ finds them there.
 nix run github:nix-purifiers/bun-purifier -- lock
 ```
 
+Then build the project from the same directory. The command adds no Nix
+file to the project, and `my-app` is the `name` in the `package.json`
+that you build:
+
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.my-app'
+```
+
 The flake's `overlays.default` adds one attribute to a package set: the
 scope `bun-purifier`, which holds the builder `buildBunProject` and the
-`bun-purifier` command. A package written for `callPackage` takes the
-scope by name:
+`bun-purifier` command.
 
-```nix
-# package.nix
-{ bun-purifier }:
-(bun-purifier.buildBunProject { src = ./.; }).packages.my-app
-```
+To package the project in a flake, call the builder in the flake. The
+flake can live in the project's repository or in another one:
 
 ```nix
 {
@@ -45,14 +57,12 @@ scope by name:
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [
-          bun-purifier.overlays.default
-          (final: prev: { my-app = final.callPackage ./package.nix { }; })
-        ];
+        overlays = [ bun-purifier.overlays.default ];
       };
+      project = pkgs.bun-purifier.buildBunProject { src = ./.; };
     in
     {
-      packages.${system}.default = pkgs.my-app;
+      packages.${system}.default = project.packages.my-app;
     };
 }
 ```
@@ -297,40 +307,27 @@ elysia has optional dependencies that only a WebAssembly fallback
 installs, so the lock writes `bun-purifier.lock.json`. Commit it next to
 `bun.lock`.
 
-Then add a `flake.nix` that builds the package and its release tarball:
+Then build it from the checkout. This runs elysia's own `build` script:
 
-```nix
-{
-  inputs.bun-purifier.url = "github:nix-purifiers/bun-purifier";
-  inputs.nixpkgs.follows = "bun-purifier/nixpkgs";
-
-  outputs = { nixpkgs, bun-purifier, ... }:
-    let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [ bun-purifier.overlays.default ];
-      };
-      elysia = pkgs.bun-purifier.buildBunProject {
-        src = ./.;
-        testScript = "test:types";
-      };
-    in
-    {
-      packages.${system} = {
-        default = elysia.packages.elysia;
-        tarball = elysia.release.elysia;
-      };
-      checks.${system}.types = elysia.tests;
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
     };
-}
+  in
+  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.elysia'
 ```
 
-`nix build` builds elysia with its own `build` script, and
-`nix build '.#tarball'` makes the tarball that `bun-purifier publish`
-uploads. elysia's `test` script installs packages from npm, and the
-sandbox has no network, so the flake runs its `test:types` script, which
-type-checks the tests with `tsc`.
+The builder returns more than the package. Name `release.elysia` in
+place of `packages.elysia` to build the tarball that
+`bun-purifier publish` uploads. Name `tests` in place of
+`packages.elysia`, and pass `testScript = "test:types"` to the builder,
+to type-check the tests with `tsc`. The `test:types` script is the one
+to run in the sandbox, because the `test` script of elysia installs
+packages from npm and the sandbox has no network.
 
 ## Credits
 
