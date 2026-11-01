@@ -332,7 +332,7 @@ in
     chmod -R u+w fixtures external
     # The workspace fixture has no lockfile: bun.lock records everything.
     test ! -e fixtures/workspace/bun-purifier.lock.json
-    for fixture in sources paths/app registries; do
+    for fixture in sources paths/app registries outdated; do
       (cd fixtures/$fixture && ${cli} lock) 2> out
       grep -q "is current" out || { cat out; exit 1; }
     done

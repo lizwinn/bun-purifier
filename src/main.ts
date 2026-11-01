@@ -4,6 +4,11 @@
 //
 //   bun-purifier lock [--force]
 //     Writes bun-purifier.lock.json from bun.lock (src/lock.ts).
+//   bun-purifier update [--lockfile <path>] [<package>...]
+//     Runs `bun update`, which resolves every package, or the named ones,
+//     anew within the ranges of package.json and rewrites bun.lock, then
+//     locks against the new bun.lock. `lock` keeps the resolution of
+//     bun.lock as it is.
 //   bun-purifier prefetch [bun install flags]
 //     Builds the locked install cache with Nix, keeps it with a GC root in
 //     node_modules/.cache/bun-purifier, and runs an offline `bun install`
@@ -36,6 +41,7 @@ import { isStale, LOCK_FILE, LockError, lock, lockedPackages, readBunLock, readL
 
 const usage = `usage:
   bun-purifier lock [--lockfile <path>] [--force]
+  bun-purifier update [--lockfile <path>] [<package>...]
   bun-purifier prefetch [--lockfile <path>] [bun install flags]
   bun-purifier publish [--lockfile <path>] [--package <name>] [bun publish flags]`;
 
@@ -188,18 +194,22 @@ const [command, ...argv] = process.argv.slice(2);
 try {
   const root = command === undefined || command === "--help" ? "" : findRoot();
   const [file, args] = takeLockfile(root, argv);
+  const report = (outcome: "wrote" | "current" | "none") =>
+    console.error(
+      outcome === "wrote"
+        ? `bun-purifier: wrote ${file}`
+        : outcome === "current"
+          ? `bun-purifier: ${basename(file)} is current.`
+          : "bun-purifier: bun.lock records everything the Nix build needs, so there is no lockfile to write.",
+    );
   switch (command) {
-    case "lock": {
-      const outcome = lock(root, file, { force: args.includes("--force"), bun: process.execPath });
-      console.error(
-        outcome === "wrote"
-          ? `bun-purifier: wrote ${file}`
-          : outcome === "current"
-            ? `bun-purifier: ${basename(file)} is current.`
-            : "bun-purifier: bun.lock records everything the Nix build needs, so there is no lockfile to write.",
-      );
+    case "lock":
+      report(lock(root, file, { force: args.includes("--force"), bun: process.execPath }));
       break;
-    }
+    case "update":
+      run([process.execPath, "update", ...args], root);
+      report(lock(root, file, { bun: process.execPath }));
+      break;
     case "prefetch":
       prefetch(root, file, args);
       break;

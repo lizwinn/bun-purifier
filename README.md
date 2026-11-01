@@ -129,6 +129,16 @@ needs nothing more, since Nix reads the new package from `bun.lock`. A
 project with one runs `bun-purifier lock`, which takes a few seconds for
 a project of a few hundred packages.
 
+To move every dependency, or the named ones, to the newest versions
+their ranges allow, run
+
+```zsh
+nix run github:nix-purifiers/bun-purifier -- update [<package>...]
+```
+
+`update` runs `bun update`, which rewrites `bun.lock`, and then locks
+against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
+
 `bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
 `bun-purifier lock`, and so does the Nix build.
 
@@ -242,9 +252,9 @@ lockfiles in `tests/negative`, a project with its lockfiles kept outside
 its source in `tests/external`, and the lockfile of elysia in
 `tests/real-world`. `nix flake check` runs the sandboxed checks, the
 `conformance-*` checks of the contract among them. `tests/cli.sh` runs
-what needs the network or Nix itself: the relock, `prefetch` followed by
-the everyday loop with the network cut, publishing, and
-`nix build --rebuild`. CI runs both on x86_64-linux and aarch64-linux.
+what needs the network or Nix itself. It relocks every fixture, updates a
+fixture that pins an old version, runs `prefetch` and then the everyday
+loop with the network cut, publishes, and runs `nix build --rebuild`. CI runs both on x86_64-linux and aarch64-linux.
 
 ## Credits
 

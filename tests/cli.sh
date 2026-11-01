@@ -19,6 +19,9 @@
 #                     installs; a lockfile edited by hand is refused
 #   publish           `publish` sends the release tarball Nix built to a
 #                     registry that records it
+#   update            `update` of a fixture that pins an old version moves
+#                     bun.lock to a newer one and relocks, after which both
+#                     lockfiles pass the stale check (conformance-update)
 #   nix-errors        a Nix build of a truncated lockfile names
 #                     `bun-purifier lock --force` (conformance-malformed)
 #   rebuild           `nix build --rebuild` of a fixture gives the same
@@ -51,7 +54,7 @@ fails_with() {
 }
 
 relock() {
-  for fixture in workspace sources paths/app registries; do
+  for fixture in workspace sources paths/app registries outdated; do
     (cd "tests/fixtures/$fixture" && "$cli" lock --force)
   done
   cp tests/external/bun.lock tests/external/src/
@@ -131,6 +134,20 @@ publish() {
   cmp "$work/sent.tgz" "$expected"/*.tgz
 }
 
+update() {
+  cp -r tests/fixtures/outdated "$work/outdated"
+  grep -F '"kleur@4.0.0"' "$work/outdated/bun.lock" > /dev/null
+  (cd "$work/outdated" && "$cli" update)
+  if grep -F '"kleur@4.0.0"' "$work/outdated/bun.lock" > /dev/null; then
+    echo "update left kleur at 4.0.0"
+    exit 1
+  fi
+  # bun.lock and the lockfile agree: the lock finds itself current, and
+  # prefetch accepts it.
+  (cd "$work/outdated" && "$cli" lock) 2>&1 | grep -F "is current"
+  (cd "$work/outdated" && "$cli" prefetch)
+}
+
 nix_errors() {
   local lib nixpkgs
   lib=$(dirname "$cli")/../share/bun-purifier/nix/lib
@@ -149,7 +166,7 @@ rebuild() {
 }
 
 sections=("$@")
-[ ${#sections[@]} -gt 0 ] || sections=(relock offline-prefetch offline-loop loop publish nix-errors rebuild)
+[ ${#sections[@]} -gt 0 ] || sections=(relock offline-prefetch offline-loop loop update publish nix-errors rebuild)
 for section in "${sections[@]}"; do
   echo "== $section"
   "${section//-/_}"
