@@ -14,7 +14,8 @@
 #   offline-loop      the everyday loop in that copy, which CI runs with
 #                     the network cut: `bun install`, `bun run build`, the
 #                     app and `bun test` (conformance-offline)
-#   loop              after `bun add`, `prefetch` refuses the stale lock
+#   loop              `lock` writes a missing bun.lock; after `bun add`,
+#                     `prefetch` refuses the stale lock
 #                     and names `bun-purifier lock`; after the lock it
 #                     installs; a lockfile edited by hand is refused
 #   publish           `publish` sends the release tarball Nix built to a
@@ -59,6 +60,9 @@ relock() {
   done
   cp tests/external/bun.lock tests/external/src/
   (cd tests/external/src && "$cli" lock --force --lockfile ../bun-purifier.lock.json)
+  # BUN_PURIFIER_LOCKFILE names the same lockfile, as a dev shell sets it.
+  (cd tests/external/src && BUN_PURIFIER_LOCKFILE=../bun-purifier.lock.json "$cli" lock) 2>&1 |
+    grep -F "is current"
   rm tests/external/src/bun.lock
   git diff --exit-code -- tests/fixtures tests/external
 
@@ -101,6 +105,14 @@ loop() {
   (cd "$work/plain" && "$cli" prefetch)
   (cd "$work/plain" && "$cli" lock) 2>&1 | grep -F "no lockfile to write"
   test ! -e "$work/plain/bun-purifier.lock.json"
+
+  # A project with no bun.lock gets one from the lock, which then locks
+  # against it.
+  mkdir "$work/fresh"
+  cp tests/fixtures/outdated/package.json "$work/fresh/"
+  (cd "$work/fresh" && "$cli" lock)
+  test -e "$work/fresh/bun.lock"
+  test -e "$work/fresh/bun-purifier.lock.json"
 
   # A project with a lockfile refuses it once bun.lock changes, until the
   # lock runs again, and refuses a lockfile edited by hand.

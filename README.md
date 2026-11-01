@@ -107,7 +107,13 @@ installs. Nix also derives the name of each package's entry in bun's
 install cache, because an offline install finds a package only under
 that name.
 
-`bun-purifier lock` records what Nix cannot derive. It copies the project
+`bun-purifier lock` first makes sure `bun.lock` matches the package
+manifests. A `bun.lock` that matches stays as it is. A missing or binary
+`bun.lock`, or one that lacks a dependency of a manifest, gets
+`bun install --lockfile-only`, which keeps every resolution `bun.lock`
+records and resolves only the rest.
+
+`bun-purifier lock` then records what Nix cannot derive. It copies the project
 to a temporary directory and installs it into an empty cache once for
 each system the nix-purifiers build for, x86_64-linux and aarch64-linux,
 and compares what bun did with what Nix derives. The lockfile records:
@@ -125,9 +131,11 @@ content. When none of the facts applies, the lock writes no lockfile.
 `bun-purifier lock` relocks only when `bun.lock` changed, or with
 `--force`, and a relock of an unchanged project writes the same file byte
 for byte, or again none. Every command takes `--lockfile <path>` for a
-lockfile kept elsewhere.
+lockfile kept elsewhere, or reads its path from the environment variable
+`BUN_PURIFIER_LOCKFILE`, which the dev shell of a packaging flake can
+set. `--lockfile` takes precedence over the variable.
 
-`lib.bun-purifier.readLock { src, root ? "", lockFile ? null, bunLock ? null }`
+`lib.bun-purifier.readLock { src, root ? "", lockFile ? ..., bunLock ? null }`
 reads both lockfiles into the shape every nix-purifier gives:
 `{ purifier, entries, outputs, problems }`. An entry that only some of
 the systems install carries `systems`. The builder checks this lock with
@@ -139,7 +147,9 @@ The development loop is bun's own: `bun install`, `bun run build`,
 `bun test`. Add or upgrade a dependency with `bun add`, which updates
 `bun.lock` over the network. A project without `bun-purifier.lock.json`
 needs nothing more, since Nix reads the new package from `bun.lock`. A
-project with one runs `bun-purifier lock` again.
+project with one runs `bun-purifier lock` again. After an edit of a
+`package.json` by hand, `bun-purifier lock` brings `bun.lock` up to date
+as well.
 
 To move every dependency, or the named ones, to the newest versions
 their ranges allow, run
@@ -161,12 +171,17 @@ nix run github:nix-purifiers/bun-purifier -- prefetch
 ```
 
 `prefetch` builds, in the Nix store, every package `bun.lock` lists for
-the current system, keeps them alive with a GC root in
-`node_modules/.cache/bun-purifier`, and runs
+the current system, keeps them alive with a garbage-collector root, and
+runs
 `bun install --frozen-lockfile --offline` from them. Further arguments go
 to `bun install`. After it, `bun install`, `bun run`, `bun test` and the
 editor work with the network cut off. `bun add` of a package not in the
 lock needs the network, as it does without bun-purifier.
+
+The garbage-collector root lies at `node_modules/.cache/bun-purifier`
+rather than beside the purifier lockfile, because a project whose
+`bun.lock` records everything has no purifier lockfile. Removing
+`node_modules` removes the root with the packages it keeps.
 
 ## Editor
 
@@ -184,7 +199,6 @@ Nix build:
 | Situation | Message ends with |
 |---|---|
 | `bun.lock` or a `package.json` changed after the lock | Run `bun-purifier lock`. |
-| `package.json` changed, `bun.lock` was not updated | run `bun install`, then lock again. |
 | `bun-purifier.lock.json` edited by hand | Run `bun-purifier lock --force` to rewrite it. |
 | Merge conflict in `bun-purifier.lock.json` | Resolve the conflict in bun.lock, then run `bun-purifier lock --force` |
 | `bun-purifier.lock.json` is not JSON | Run `bun-purifier lock --force` to rewrite it. |

@@ -3,7 +3,10 @@
 // The bun-purifier command.
 //
 //   bun-purifier lock [--force]
-//     Writes bun-purifier.lock.json from bun.lock (src/lock.ts).
+//     Runs `bun install --lockfile-only`, which keeps every resolution
+//     bun.lock records and writes bun.lock where it is missing or
+//     incomplete, then writes bun-purifier.lock.json from bun.lock
+//     (src/lock.ts).
 //   bun-purifier update [--lockfile <path>] [<package>...]
 //     Runs `bun update`, which resolves every package, or the named ones,
 //     anew within the ranges of package.json and rewrites bun.lock, then
@@ -54,20 +57,39 @@ function env(name: string): string {
   return process.env[name] ?? fail(`${name} is not set; run bun-purifier through its Nix package.`);
 }
 
-// The project root: the nearest directory upward with a bun.lock.
-function findRoot(): string {
+// The project root: the nearest directory upward with a bun.lock, or for
+// `lock`, which writes bun.lock, the working directory when it holds a
+// package.json.
+function findRoot(command: string): string {
   let dir = process.cwd();
   for (;;) {
     if (existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) fail("no bun.lock in this directory or above it.");
+    if (parent === dir) break;
     dir = parent;
   }
+  if (command === "lock" && existsSync(join(process.cwd(), "package.json"))) return process.cwd();
+  fail("no bun.lock in this directory or above it.");
 }
 
 function run(argv: string[], cwd: string): void {
   const result = Bun.spawnSync(argv, { cwd, stdout: "inherit", stderr: "inherit", stdin: "inherit" });
   if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+}
+
+// Leaves a bun.lock that matches the package manifests as it is. A
+// missing, binary or incomplete one gets `bun install --lockfile-only`,
+// which keeps every resolution bun.lock records and resolves the rest.
+function completeBunLock(root: string): void {
+  if (existsSync(join(root, "bun.lock"))) {
+    const frozen = Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--lockfile-only", "--no-progress"], {
+      cwd: root,
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    if (frozen.exitCode === 0) return;
+  }
+  run([process.execPath, "install", "--lockfile-only", "--save-text-lockfile", "--no-progress"], root);
 }
 
 function nixBuild(root: string, args: string[], outLink?: string): string {
@@ -98,10 +120,12 @@ function requireCurrentLock(root: string, file: string): void {
 
 // Takes `--lockfile <path>` (or `--lockfile=<path>`) out of the
 // arguments. The lockfile is bun-purifier.lock.json at the project root
-// unless it names another, such as one a packaging flake keeps outside
-// the project.
+// unless the option or the BUN_PURIFIER_LOCKFILE variable names another,
+// such as one a packaging flake keeps outside the project. The dev shell
+// of that flake can set the variable, and the option takes precedence
+// over it.
 function takeLockfile(root: string, args: string[]): [file: string, rest: string[]] {
-  let file = join(root, LOCK_FILE);
+  let file = process.env.BUN_PURIFIER_LOCKFILE ? resolve(process.env.BUN_PURIFIER_LOCKFILE) : join(root, LOCK_FILE);
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--lockfile") file = resolve(args[++i] ?? fail("--lockfile needs a path."));
@@ -192,7 +216,7 @@ function publish(root: string, file: string, args: string[]): void {
 
 const [command, ...argv] = process.argv.slice(2);
 try {
-  const root = command === undefined || command === "--help" ? "" : findRoot();
+  const root = command === undefined || command === "--help" ? "" : findRoot(command);
   const [file, args] = takeLockfile(root, argv);
   const report = (outcome: "wrote" | "current" | "none") =>
     console.error(
@@ -204,6 +228,7 @@ try {
     );
   switch (command) {
     case "lock":
+      completeBunLock(root);
       report(lock(root, file, { force: args.includes("--force"), bun: process.execPath }));
       break;
     case "update":
