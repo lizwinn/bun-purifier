@@ -59,6 +59,7 @@
               inherit pkgs;
               overlay = self.overlays.default;
               inherit (self.packages.${system}) bun-purifier;
+              realWorld = { inherit (inputs) elysia; };
             };
             treefmt.programs.nixfmt.enable = true;
           };

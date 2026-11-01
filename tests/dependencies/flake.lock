@@ -35,6 +35,23 @@
         "type": "github"
       }
     },
+    "elysia": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787763092,
+        "narHash": "sha256-6uGhZ4FmcEgvIHNMAvyabEVeb1pLOWGBXUoUjp5DjBQ=",
+        "owner": "elysiajs",
+        "repo": "elysia",
+        "rev": "e037eca710e7ad193be09cc6615ab0dbe54af914",
+        "type": "github"
+      },
+      "original": {
+        "owner": "elysiajs",
+        "repo": "elysia",
+        "rev": "e037eca710e7ad193be09cc6615ab0dbe54af914",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -110,6 +127,7 @@
     "root": {
       "inputs": {
         "caisson": "caisson",
+        "elysia": "elysia",
         "flake-parts": "flake-parts_2",
         "nixpkgs": "nixpkgs",
         "treefmt-nix": "treefmt-nix"

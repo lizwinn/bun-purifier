@@ -53,8 +53,10 @@
   # The package script that builds a package. Packages without it are
   # installed only.
   buildScript ? "build",
-  # Runs each package's `test` script after the build.
+  # Runs each package's `checkScript` after the build.
   doCheck ? false,
+  # The package script `doCheck` runs.
+  checkScript ? "test",
   # Filters the project root before it is copied into the store, as the
   # `filter` of builtins.path. The default leaves out node_modules, build
   # outputs of bun-purifier and editor state.
@@ -65,6 +67,7 @@ let
   # The project directory in the build and in `project`.
   rootPrefix = if root == "" then "" else "${root}/";
   lockPath = if lockFile != null then lockFile else projectSrc + "/bun-purifier.lock.json";
+  lockName = baseNameOf (toString lockPath);
 
   lock = import ./lock.nix {
     lockFile = lockPath;
@@ -94,6 +97,15 @@ let
       "bun-purifier: ${toString lockPath} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
       bun;
 
+  # Executables in node_modules start with `#!/usr/bin/env node`, and the
+  # sandbox has no /usr/bin/env. The build rewrites those lines to this
+  # `node`, which is the build's bun under that name, so the scripts run on
+  # the bun the project runs on, inside the sandbox and in the output.
+  bunAsNode = runCommand "bun-as-node" { } ''
+    mkdir -p $out/bin
+    ln -s ${checkedBun}/bin/bun $out/bin/node
+  '';
+
   cache = callPackage ./cache.nix (
     {
       lockFile = lockPath;
@@ -101,6 +113,19 @@ let
     }
     // lib.optionalAttrs (fetchgit != null) { inherit fetchgit; }
   );
+
+  # The offline install, run in the project directory. bun writes into its
+  # cache directory, so it gets a writable copy of the tree of links to the
+  # unpacked packages.
+  installScript = ''
+    cp -r --no-dereference ${cache} $TMPDIR/bun-cache
+    chmod -R u+w $TMPDIR/bun-cache
+    bun install --frozen-lockfile --offline --no-progress \
+      --cache-dir=$TMPDIR/bun-cache --backend=copyfile || {
+      echo "bun-purifier: bun could not install offline from the packages of ${lockName}. The lockfile lacks a package that bun.lock needs; run \`bun-purifier lock --force\` and commit the result." >&2
+      exit 1
+    }
+  '';
 
   # Packages with a name and a version: the ones `bun pm pack` can pack.
   namedPackages = lib.attrValues lock.packagesByName;
@@ -133,7 +158,10 @@ let
       "out"
       "packs"
     ];
-    nativeBuildInputs = [ checkedBun ];
+    nativeBuildInputs = [
+      checkedBun
+      bunAsNode
+    ];
     inherit doCheck;
 
     configurePhase = ''
@@ -143,12 +171,8 @@ let
       cd ./${rootPrefix}
       export HOME=$TMPDIR/home DO_NOT_TRACK=1
       mkdir -p $HOME
-      # bun writes into its cache directory: a writable copy of the tree of
-      # links to the unpacked packages.
-      cp -r --no-dereference ${cache} $TMPDIR/bun-cache
-      chmod -R u+w $TMPDIR/bun-cache
-      bun install --frozen-lockfile --offline --no-progress \
-        --cache-dir=$TMPDIR/bun-cache --backend=copyfile
+      ${installScript}
+      patchShebangs --build $(find . -name node_modules -type d -prune)
       runHook postConfigure
     '';
 
@@ -160,7 +184,7 @@ let
 
     checkPhase = ''
       runHook preCheck
-      ${runScript "test"}
+      ${runScript checkScript}
       runHook postCheck
     '';
 
@@ -187,7 +211,7 @@ let
     '';
 
     dontFixup = true;
-    passthru = { inherit lock cache; };
+    passthru = { inherit lock cache installScript; };
   };
 
   # The file name `bun pm pack` gives a package's tarball: the name without
@@ -254,9 +278,7 @@ let
         )}
       '';
 in
-assert
-  !lock.stale
-  || throw "bun-purifier: bun.lock or a package manifest under ${toString projectSrc} changed since ${toString lockPath} was made. Run `bun-purifier lock`.";
+assert lock.problems == [ ] || throw (builtins.concatStringsSep "\n" lock.problems);
 {
   inherit
     cache

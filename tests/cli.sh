@@ -6,12 +6,33 @@
 # repository root after `nix flake check`.
 #
 #   1. The lock run: relocking every fixture with --force writes the
-#      lockfile it already has.
+#      lockfile it already has, byte for byte, and so does relocking
+#      elysia (a real project, at the commit tests/dependencies pins) from
+#      a fresh checkout.
 #   2. The interactive install: `install` sets up the workspace fixture
 #      from its lock, twice, and the app then builds and runs.
-#   3. Publishing: `publish` sends the tarball Nix packed to a registry
+#   3. The everyday loop: after `bun add`, `install` refuses the stale
+#      lock and names `bun-purifier lock`; after the lock, it installs.
+#      A lockfile edited by hand is refused the same way.
+#   4. Publishing: `publish` sends the tarball Nix packed to a registry
 #      that records it.
 set -euo pipefail
+
+# Runs a command that must fail, and checks that its error output names
+# `expected`.
+fails_with() {
+  local expected=$1
+  shift
+  if "$@" 2> "$work/err"; then
+    echo "succeeded, but should have failed: $*"
+    exit 1
+  fi
+  if ! grep -F -- "$expected" "$work/err" > /dev/null; then
+    echo "the error of $* does not say: $expected"
+    cat "$work/err"
+    exit 1
+  fi
+}
 
 cli=$(nix build --no-link --print-out-paths '.#bun-purifier')/bin/bun-purifier
 bun=$(nix build --no-link --print-out-paths '.#bun-purifier.bun')/bin/bun
@@ -27,6 +48,14 @@ for fixture in workspace sources paths/app registries; do
 done
 git diff --exit-code -- tests/fixtures
 
+elysia_rev=$("$jq" -r .nodes.elysia.locked.rev tests/dependencies/flake.lock)
+git clone --quiet https://github.com/elysiajs/elysia "$work/elysia"
+git -C "$work/elysia" checkout --quiet "$elysia_rev"
+start=$(date +%s)
+(cd "$work/elysia" && "$cli" lock)
+echo "elysia relocked in $(($(date +%s) - start)) s"
+cmp "$work/elysia/bun-purifier.lock.json" tests/real-world/elysia/bun-purifier.lock.json
+
 echo "== interactive install"
 cp -r tests/fixtures/workspace "$work/workspace"
 (cd "$work/workspace" && "$cli" install && "$cli" install)
@@ -36,6 +65,15 @@ if [ "$actual" != "3 is odd: true" ]; then
   echo "the app printed: $actual"
   exit 1
 fi
+
+echo "== everyday loop"
+cp -r tests/fixtures/workspace "$work/loop"
+(cd "$work/loop/packages/lib" && "$bun" add ms@2.1.3)
+(cd "$work/loop" && fails_with 'Run `bun-purifier lock`' "$cli" install)
+(cd "$work/loop" && "$cli" lock && "$cli" install)
+grep -F '"url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"' "$work/loop/bun-purifier.lock.json" > /dev/null
+sed -i 's/"hash": "sha512-W/"hash": "sha512-X/' "$work/loop/bun-purifier.lock.json"
+(cd "$work/loop" && fails_with 'bun-purifier lock --force' "$cli" install)
 
 echo "== publish"
 "$bun" tests/registry.ts 4873 "$work/request.json" &

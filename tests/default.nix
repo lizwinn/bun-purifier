@@ -7,6 +7,9 @@
   # The flake's default package overlay, which adds buildBunProject.
   overlay,
   bun-purifier,
+  # The sources of the real-world projects, pinned in
+  # tests/dependencies/flake.lock.
+  realWorld,
 }:
 let
   inherit (pkgs) lib;
@@ -39,6 +42,35 @@ let
   # registry.
   registries = buildBunProject { src = ./fixtures/registries; };
 
+  # Elysia, a bun web framework, at a pinned commit. Its build bundles with
+  # tsup and esbuild and writes type declarations with tsc. Its `test`
+  # script also installs from npm over the network, so the check runs the
+  # type check of its tests, the same checking an editor's TypeScript
+  # server does, and the integration check below runs `bun test`.
+  elysia = buildBunProject {
+    src = realWorld.elysia;
+    lockFile = ./real-world/elysia/bun-purifier.lock.json;
+    doCheck = true;
+    checkScript = "test:types";
+  };
+
+  # Lockfiles broken the ways a developer breaks them, each a copy of the
+  # workspace fixture: a manifest changed after the lock, a hash edited by
+  # hand, a merge conflict, and an entry missing with the digest
+  # recomputed, as a bug in the lock would leave it.
+  negativeLock =
+    name:
+    import ../nix/lib/lock.nix {
+      lockFile = ./negative/${name}/bun-purifier.lock.json;
+      root = ./negative/${name};
+    };
+  expectProblem =
+    name: text:
+    lib.assertMsg (builtins.any (lib.hasInfix text) (negativeLock name).problems) "the problems of tests/negative/${name} do not mention: ${text}";
+  fails =
+    name: !(builtins.tryEval (buildBunProject { src = ./negative/${name}; }).project.drvPath).success;
+  missingEntry = buildBunProject { src = ./negative/missing-entry; };
+
   # Runs an executable, by the path its program names for it, and compares
   # its output.
   runs =
@@ -65,6 +97,84 @@ in
   paths-program =
     runs "paths-program" paths.programs.fixture-paths.executables.fixture-paths
       "shared vendored packed plain:true";
+
+  # The unit tests of the lock (tests/unit).
+  unit =
+    pkgs.runCommand "test-unit"
+      {
+        nativeBuildInputs = [ withOverlay.bun ];
+        src = lib.fileset.toSource {
+          root = ../.;
+          fileset = lib.fileset.unions [
+            ../src
+            ./unit
+          ];
+        };
+      }
+      ''
+        export HOME=$TMPDIR
+        cp -r $src/. .
+        bun test ./tests/unit
+        touch $out
+      '';
+
+  # Each broken lockfile stops the build with a message that names the
+  # problem and the command that fixes it.
+  lock-problems =
+    assert expectProblem "stale" "changed since";
+    assert expectProblem "stale" "Run `bun-purifier lock`";
+    assert expectProblem "tampered" "edited after the lock";
+    assert expectProblem "tampered" "bun-purifier lock --force";
+    assert expectProblem "conflicted" "merge conflict markers";
+    assert expectProblem "conflicted" "bun-purifier lock --force";
+    assert (negativeLock "missing-entry").problems == [ ];
+    assert lib.assertMsg (lib.all fails [
+      "stale"
+      "tampered"
+      "conflicted"
+    ]) "a broken lockfile did not stop the build";
+    pkgs.runCommand "test-lock-problems" { } "touch $out";
+
+  # A lockfile without a package bun needs passes the digest check, and
+  # the offline install then fails with a message that says to relock.
+  missing-entry =
+    pkgs.runCommand "test-missing-entry"
+      {
+        nativeBuildInputs = [ withOverlay.bun ];
+      }
+      ''
+        export HOME=$TMPDIR
+        cp -r ${./negative/missing-entry} project
+        chmod -R u+w project
+        cd project
+        if (${missingEntry.project.installScript}) 2> err; then
+          echo "the install succeeded without is-number"
+          exit 1
+        fi
+        cat err
+        grep 'run `bun-purifier lock --force`' err
+        touch $out
+      '';
+
+  # Elysia builds, type-checks, packs, and passes its own test suite.
+  elysia =
+    pkgs.runCommand "test-elysia"
+      {
+        nativeBuildInputs = [
+          withOverlay.bun
+          pkgs.gnutar
+          pkgs.gzip
+        ];
+      }
+      ''
+        export HOME=$TMPDIR
+        tar -tzf ${elysia.packages.elysia.tarball} | grep '^package/dist/index.mjs$' > /dev/null
+        cp -r ${elysia.project} elysia
+        chmod -R u+w elysia
+        cd elysia
+        bun test
+        touch $out
+      '';
 
   registries-program =
     runs "registries-program" registries.programs.fixture-registries.executables.fixture-registries

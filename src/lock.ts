@@ -76,11 +76,31 @@ export type Lock = {
   version: number;
   bunVersion: string;
   inputsHash: string;
+  artifactsHash: string;
   packages: LockedPackage[];
   artifacts: Artifact[];
 };
 
-type BunLock = {
+// JSON as Nix's builtins.toJSON writes it: object keys sorted, no
+// whitespace.
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// The digest nix/lib/lock.nix recomputes to tell a lockfile whose
+// artifacts were edited after the lock.
+export function artifactsHash(artifacts: Artifact[]): string {
+  return createHash("sha256").update(canonicalJson(artifacts)).digest("hex");
+}
+
+export type BunLock = {
   lockfileVersion: number;
   workspaces: Record<string, unknown>;
   packages: Record<string, unknown[]>;
@@ -163,8 +183,9 @@ function npmrcRegistry(file: string): string | undefined {
 // bunfig.toml and .npmrc, the user's .bunfig.toml and .npmrc, and else the
 // npm registry. A scoped package needs none of this: bun.lock records the
 // tarball URL of every package from a registry other than the default.
-function defaultRegistry(root: string): string {
-  const home = homedir();
+export function defaultRegistry(root: string): string {
+  // bun and npm find the user's files through HOME.
+  const home = process.env.HOME || homedir();
   const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
   const url =
     process.env.BUN_CONFIG_REGISTRY ||
@@ -183,7 +204,7 @@ function defaultRegistry(root: string): string {
 // so an SSH URL becomes the HTTPS URL of the same repository, which is
 // what bun falls back to as well. A private repository needs a `fetchgit`
 // with credentials in the Nix build.
-function gitFetchUrl(resolution: string): string {
+export function gitFetchUrl(resolution: string): string {
   const url = resolution.replace(/^git\+/, "").replace(/#.*$/, "");
   const ssh = /^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(url);
   if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
@@ -206,7 +227,7 @@ function gitHash(url: string, rev: string): string {
 
 // bun leaves the host out of the cache name of a package from the npm
 // registry.
-function cacheHost(registryUrl: string): string {
+export function cacheHost(registryUrl: string): string {
   const host = new URL(registryUrl).host;
   return host === "registry.npmjs.org" ? "" : host;
 }
@@ -215,14 +236,14 @@ function cacheHost(registryUrl: string): string {
 // names of downloaded archives end in `@@@<cache version>`, and a scoped
 // package's entry sits in a directory named for its scope. A git checkout
 // is `@G@<commit>`.
-type Observed = {
+export type Observed = {
   registry: Map<string, string>; // `${name}@${version}@@${host}` -> path
   github: Map<string, string>; // resolution id -> path
   tarball: Map<string, string[]>; // package name -> paths
   git: Map<string, string>; // commit -> path
 };
 
-function observe(cache: string): Observed {
+export function observe(cache: string): Observed {
   const observed: Observed = { registry: new Map(), github: new Map(), tarball: new Map(), git: new Map() };
   const entries: string[] = [];
   for (const name of readdirSync(cache)) {
@@ -259,7 +280,7 @@ function observe(cache: string): Observed {
 // The path of a dependency on a local directory or tarball, relative to
 // the project root, or undefined for any other dependency. bun.lock
 // writes a directory as `file:<path>` and a tarball as the bare path.
-function localPath(resolution: string): string | undefined {
+export function localPath(resolution: string): string | undefined {
   if (resolution.startsWith("file:")) return normalize(resolution.slice("file:".length));
   if (/^(\.\.?\/|\/)/.test(resolution)) return normalize(resolution);
   return undefined;
@@ -315,44 +336,44 @@ function lockRun(root: string, bunLock: BunLock, bun: string): string {
     );
     if (run.exitCode !== 0) {
       rmSync(work, { recursive: true, force: true });
-      throw new LockError(`the lock run's bun install for ${os}-${cpu} failed.`);
+      // The lock run installs with --frozen-lockfile, which fails when
+      // bun.lock no longer matches the package manifests.
+      throw new LockError(
+        `the lock run's \`bun install --frozen-lockfile\` for ${os}-${cpu} failed (its output is above). If bun.lock is out of date with package.json, run \`bun install\`, then lock again.`,
+      );
     }
   }
   return work;
 }
 
-function admitsAnyPlatform(meta: Meta): boolean {
-  const admits = (field: string | string[] | undefined, value: string) => {
-    const entries = field === undefined ? [] : Array.isArray(field) ? field : [field];
-    const exclusions = entries.filter((e) => e.startsWith("!"));
-    const inclusions = entries.filter((e) => !e.startsWith("!"));
-    return !exclusions.includes(`!${value}`) && (inclusions.length === 0 || inclusions.includes(value));
-  };
-  return PLATFORMS.some(([os, cpu]) => admits(meta.os, os) && admits(meta.cpu, cpu));
-}
-
-// Whether a registry entry of bun.lock comes from the default registry,
-// which bun.lock writes as "".
-function tarballFromDefault(entry: unknown[]): boolean {
-  return entry.length === 4 && entry[1] === "";
-}
-
 // Splits a bun.lock package key, `<name>@<resolution>`, where a scoped
 // name starts with "@" itself.
-function splitKey(key: string): [name: string, resolution: string] {
+export function splitKey(key: string): [name: string, resolution: string] {
   const at = key.indexOf("@", key.startsWith("@") ? 1 : 0);
   return [key.slice(0, at), key.slice(at + 1)];
 }
 
-function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact[] {
+// The artifacts of bun.lock that bun installs. The lock run installs for
+// every platform Nix builds for, so a package it left out of the cache is
+// one bun needs on none of them, such as a dependency of a WebAssembly
+// fallback, and the lockfile leaves it out too. Every entry the lock run
+// put in the cache has to match a package of bun.lock; one that matches
+// none means bun-purifier computed a cache name differently from bun.
+export function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact[] {
   const registry = defaultRegistry(root);
   const result: Artifact[] = [];
+  // bun also extracts a local tarball into a `@T@` cache entry. That entry
+  // belongs to the source, so it is not a download.
+  const localTarballs = new Set<string>();
   for (const [id, entry] of Object.entries(bunLock.packages)) {
     const [name, resolution] = splitKey(entry[0] as string);
     // Workspaces, the root and local directories and tarballs are part of
     // the source. An offline install extracts a local tarball from the
     // file itself.
-    if (/^(workspace|root):/.test(resolution) || localPath(resolution) !== undefined) continue;
+    if (/^(workspace|root):/.test(resolution) || localPath(resolution) !== undefined) {
+      if (localPath(resolution) !== undefined && !resolution.startsWith("file:")) localTarballs.add(name);
+      continue;
+    }
     if (resolution.startsWith("link:")) {
       throw new LockError(
         `${id} is a link: dependency. It names a package registered with \`bun link\` in bun's global directory on this machine, and bun.lock records only the name, so no other machine and no Nix build can resolve it. Depend on the package with file: and its path instead.`,
@@ -362,7 +383,7 @@ function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact
       // [key, meta, commit]
       const rev = entry[2] as string;
       const path = observed.git.get(rev);
-      if (path === undefined) throw new LockError(`the lock run left ${id} out of the cache, so its cache path is unknown.`);
+      if (path === undefined) continue;
       const url = gitFetchUrl(resolution);
       const artifact: Artifact = {
         path,
@@ -408,33 +429,81 @@ function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact
       const host = cacheHost(tarball !== "" ? tarball : registry);
       path = observed.registry.get(`${name}@${resolution}@@${host}`);
     }
+    if (path === undefined) continue;
     if (typeof integrity !== "string") {
-      throw new LockError(`bun.lock has no integrity hash for ${id}.`);
-    }
-    if (path === undefined) {
-      if (!admitsAnyPlatform(meta ?? {})) continue;
-      if (tarballFromDefault(entry)) {
-        throw new LockError(
-          `the lock run left ${id} out of the cache under the registry ${registry}. bun may have installed it from another default registry; set it in bunfig.toml or .npmrc.`,
-        );
-      }
-      throw new LockError(`the lock run left ${id} out of the cache, so its cache path is unknown.`);
+      throw new LockError(`bun.lock has no integrity hash for ${id}. Run \`bun install --force\` to rewrite bun.lock, then lock again.`);
     }
     const artifact: Artifact = { path, archive: { url, mirrors: [], stripTop: true }, hash: integrity };
     if (meta?.os !== undefined) artifact.os = meta.os;
     if (meta?.cpu !== undefined) artifact.cpu = meta.cpu;
     result.push(artifact);
   }
-  return result.sort((a, b) => a.path.localeCompare(b.path));
+  const byPath = new Map<string, Artifact>();
+  for (const artifact of result) byPath.set(artifact.path, sameArtifact(byPath.get(artifact.path), artifact));
+  const fromSource = new Set([...localTarballs].flatMap((name) => observed.tarball.get(name) ?? []));
+  const unmatched = observedPaths(observed).filter((p) => !byPath.has(p) && !fromSource.has(p));
+  if (unmatched.length > 0) {
+    throw new LockError(
+      `the lock run installed packages that match no entry of bun.lock under the registry ${registry}: ${unmatched.join(", ")}. If bun installs from another default registry, set it in bunfig.toml or .npmrc.`,
+    );
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+// bun.lock keys a package by where it sits in the dependency tree, so two
+// keys can name the same version, which bun keeps in one cache entry. Both
+// must agree on where it comes from.
+function sameArtifact(previous: Artifact | undefined, artifact: Artifact): Artifact {
+  if (previous === undefined) return artifact;
+  if (JSON.stringify(previous) !== JSON.stringify(artifact)) {
+    throw new LockError(
+      `bun.lock has two entries for the cache entry ${artifact.path} with different sources or hashes. Run \`bun install --force\` to rewrite bun.lock, then lock again.`,
+    );
+  }
+  return previous;
+}
+
+function observedPaths(observed: Observed): string[] {
+  return [
+    ...observed.registry.values(),
+    ...observed.github.values(),
+    ...[...observed.tarball.values()].flat(),
+    ...observed.git.values(),
+  ];
+}
+
+// Reads the lockfile, or undefined when there is none. A lockfile that
+// cannot be used throws an error that says what to run.
 export function readLock(root: string): Lock | undefined {
   const file = join(root, LOCK_FILE);
-  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Lock) : undefined;
+  if (!existsSync(file)) return undefined;
+  const text = readFileSync(file, "utf8");
+  if (/^<<<<<<< /m.test(text)) {
+    throw new LockError(
+      `${LOCK_FILE} has merge conflict markers. Resolve the conflict in bun.lock, then run \`bun-purifier lock --force\` to rewrite ${LOCK_FILE}.`,
+    );
+  }
+  let lock: Lock;
+  try {
+    lock = JSON.parse(text) as Lock;
+  } catch {
+    throw new LockError(`${LOCK_FILE} is not valid JSON. Run \`bun-purifier lock --force\` to rewrite it.`);
+  }
+  if (lock.version !== LOCK_VERSION) {
+    throw new LockError(
+      `${LOCK_FILE} has lock format version ${lock.version}; this bun-purifier writes version ${LOCK_VERSION}. Run \`bun-purifier lock --force\`.`,
+    );
+  }
+  if (artifactsHash(lock.artifacts ?? []) !== lock.artifactsHash) {
+    throw new LockError(
+      `the packages of ${LOCK_FILE} do not match the digest \`bun-purifier lock\` recorded, so the file was edited after the lock. Run \`bun-purifier lock --force\` to rewrite it.`,
+    );
+  }
+  return lock;
 }
 
 export function isCurrent(root: string, lock: Lock | undefined): boolean {
-  if (lock === undefined || lock.version !== LOCK_VERSION || lock.bunVersion !== Bun.version) return false;
+  if (lock === undefined || lock.bunVersion !== Bun.version) return false;
   return inputsHash(root, lock.packages) === lock.inputsHash;
 }
 
@@ -442,16 +511,20 @@ export function isCurrent(root: string, lock: Lock | undefined): boolean {
 // Returns whether it wrote.
 export function lock(root: string, options: { force?: boolean; bun: string }): boolean {
   const bunLock = readBunLock(root);
+  // --force rewrites a lockfile that cannot be read, which is what the
+  // errors of readLock tell the user to run.
   if (!options.force && isCurrent(root, readLock(root))) return false;
   const packages = lockedPackages(root, bunLock);
   const work = lockRun(root, bunLock, options.bun);
   try {
+    const locked = artifacts(root, bunLock, observe(join(work, "cache")));
     const result: Lock = {
       version: LOCK_VERSION,
       bunVersion: Bun.version,
       inputsHash: inputsHash(root, packages),
+      artifactsHash: artifactsHash(locked),
       packages,
-      artifacts: artifacts(root, bunLock, observe(join(work, "cache"))),
+      artifacts: locked,
     };
     writeFileSync(join(root, LOCK_FILE), `${JSON.stringify(result, null, 2)}\n`);
     return true;

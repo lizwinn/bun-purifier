@@ -2,6 +2,7 @@
   "version": 1,
   "bunVersion": "1.4.2",
   "inputsHash": "a80ad126c128ba7d6126cd86c401b783a6cfdb0ced3f4ed0df586dfe5931e36a",
+  "artifactsHash": "f8be31c7cf8839604fcd7033a91257125d336f1d544af5e97c0fa1b6ab25179b",
   "packages": [
     {
       "path": "",

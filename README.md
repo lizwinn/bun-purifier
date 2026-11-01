@@ -112,13 +112,19 @@ to find out what the project produces.
   is needed only for `file:` dependencies outside the project (see
   below).
 - `buildScript`: the script that builds a package, `build` by default.
-- `doCheck`: runs each package's `test` script.
+- `doCheck` and `checkScript`: run each package's `checkScript`, `test`
+  by default, after the build.
 - `fetchurl` and `fetchgit`: replace the fetchers, for credentials or
   mirrors.
 - `srcFilter`: filters the source before it is copied into the store.
 
 The builder takes `bun` from the package set, so
 `buildBunProject.override` replaces it.
+
+Executables in `node_modules` start with `#!/usr/bin/env node`, and the
+sandbox has no `/usr/bin/env`. The build rewrites those lines to a `node`
+that is the build's bun, so tools like `tsc` run in the sandbox on the
+bun the project runs on.
 
 ### Installing from the lock
 
@@ -129,8 +135,30 @@ nix run github:nix-purifiers/bun-purifier -- install
 `install` builds the locked cache with Nix, keeps it alive with a GC root
 in `node_modules/.cache/bun-purifier`, and runs
 `bun install --frozen-lockfile --offline` from it. Further arguments go to
-`bun install`. A dependency that is not in the lockfile fails the install;
-change dependencies with plain `bun`, then lock again.
+`bun install`. `node_modules` then holds ordinary files, so an editor's
+TypeScript server and `tsc` read the installed types as after a plain
+`bun install`.
+
+The everyday loop stays bun's own. Add or upgrade a dependency with
+`bun add`, which updates `bun.lock` over the network, then run
+`bun-purifier lock`, which takes a few seconds for a project of a few
+hundred packages, and `bun-purifier install`.
+
+### When something is wrong
+
+Every check names the command that fixes it:
+
+| Situation | Message ends with |
+|---|---|
+| `bun.lock` or a `package.json` changed after the lock | Run `bun-purifier lock`. |
+| `package.json` changed, `bun.lock` was not updated | run `bun install`, then lock again. |
+| `bun-purifier.lock.json` edited by hand | Run `bun-purifier lock --force` to rewrite it. |
+| Merge conflict in `bun-purifier.lock.json` | Resolve the conflict in bun.lock, then run `bun-purifier lock --force` |
+| `bun-purifier.lock.json` is not JSON | Run `bun-purifier lock --force` to rewrite it. |
+| The lockfile lacks a package bun needs | run `bun-purifier lock --force` and commit the result. |
+| A `link:` dependency | Depend on the package with file: and its path instead. |
+
+The Nix build and the CLI give the same messages.
 
 ### Publishing
 
@@ -189,11 +217,41 @@ another minor version prints a warning. The `bun-purifier` command runs
 the bun of its own package set, so `lock`, `install` and `publish` agree
 with each other.
 
+## Projects it was tried on
+
+- [elysia](https://github.com/elysiajs/elysia) at `e037eca`, a bun web
+  framework with 232 locked packages and a `bun.lock` in format version 1.
+  It locks in about 3 seconds. In the sandbox it installs offline, builds
+  with tsup, esbuild and `tsc`, type-checks its tests with `tsc`, and
+  passes its own 1616-test suite. `nix flake check` builds it, and CI
+  relocks it from a fresh checkout and compares the lockfile byte for
+  byte.
+
+elysia found three bugs, all fixed:
+
+- Packages that only a WebAssembly fallback needs, which bun installs on
+  no platform Nix builds for, made the lock fail.
+- Two `bun.lock` keys for the same package version wrote the same cache
+  entry twice.
+- `#!/usr/bin/env node` scripts in `node_modules` did not run in the
+  sandbox.
+
 ## Development
 
-`nix flake check` builds every fixture under `tests/fixtures` in the
-sandbox, runs its programs, and publishes a tarball to a registry inside
-the sandbox. `tests/cli.sh` checks what needs the network: that relocking
-each fixture reproduces its lockfile, that `install` works, and that
-`publish` sends the tarball Nix built. CI runs `nix flake check` on
-x86_64-linux and aarch64-linux, and `tests/cli.sh` on x86_64-linux.
+- `tests/unit`: unit tests of reading `bun.lock`, choosing registries and
+  URLs, mapping cache entries to packages, and reading a lockfile, run
+  with `bun test`.
+- `tests/fixtures`: a project for every kind of dependency (registry,
+  scoped registry, prerelease, GitHub, tarball URL, git, local directory
+  and tarball, per-platform optional packages, workspaces), each built
+  and run in the sandbox.
+- `tests/negative`: a stale lock, a hand-edited hash, a merge conflict
+  and a missing entry, each checked for its message.
+- `tests/real-world`: the lockfiles of the projects above.
+- `tests/cli.sh`: what needs the network or Nix itself. Relocking every
+  fixture and elysia reproduces each lockfile byte for byte, `install`
+  works, the everyday loop refuses a stale or edited lock with the right
+  message, and `publish` sends the tarball Nix built.
+
+`nix flake check` runs everything but `tests/cli.sh`. CI runs both on
+x86_64-linux and aarch64-linux.
