@@ -35,11 +35,18 @@ these names with hashes of its own, for prerelease versions and for
 tarball URLs.
 
 `bun-purifier lock` therefore copies the project to a temporary directory
-and installs it into an empty cache once for each platform that Nix
-builds for: Linux and macOS, on x64 and arm64. It reads the name of every
-cache entry and pairs it with the package's URL and hash. Packages for
-other platforms, such as esbuild's Windows binary, stay out of the
+and installs it into an empty cache once for each system the
+nix-purifiers build for, x86_64-linux and aarch64-linux. It reads the
+name of every cache entry and pairs it with the package's URL and hash.
+A package bun installs on neither system, such as esbuild's binary for
+macOS or a dependency of a WebAssembly fallback, stays out of the
 lockfile.
+
+Each package is a download entry of the shared
+[purifier](https://github.com/nix-purifiers/purifier) library: an
+archive entry for a tarball, a git entry for a git checkout. The library
+fetches and unpacks the entries, and decides with npm's `os`, `cpu` and
+`libc` filters which ones a system installs.
 
 The lockfile also records a digest of `bun.lock` and the package
 manifests. `bun-purifier lock` relocks only when they changed, or with
