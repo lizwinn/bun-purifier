@@ -32,6 +32,9 @@
   # entries by its own rules, so the lock records the bun version it was
   # made with, and a different minor version draws a warning.
   bun,
+  # The `purifier` library namespace of the shared nix-purifiers library.
+  # The overlay passes it from the library of this flake.
+  purifier,
 }:
 {
   # The source tree: the bun project, the directory of bun.lock, or a
@@ -44,7 +47,9 @@
   # The lockfile; null names the one `bun-purifier lock` writes at the
   # project root.
   lockFile ? null,
-  # Replaces the built-in fetcher of archives; see fetch.nix.
+  # Replaces nixpkgs' fetchurl for registry packages and tarballs, for
+  # credentials or mirrors. It is called with the arguments of nixpkgs'
+  # fetchurl.
   fetchurl ? null,
   # Replaces nixpkgs' fetchgit for git dependencies, for a private
   # repository that needs credentials. It is called with the arguments of
@@ -106,13 +111,15 @@ let
     ln -s ${checkedBun}/bin/bun $out/bin/node
   '';
 
-  cache = callPackage ./cache.nix (
-    {
-      lockFile = lockPath;
-      inherit system fetchurl;
-    }
-    // lib.optionalAttrs (fetchgit != null) { inherit fetchgit; }
-  );
+  cache = callPackage ./cache.nix {
+    lockFile = lockPath;
+    inherit
+      purifier
+      system
+      fetchurl
+      fetchgit
+      ;
+  };
 
   # The offline install, run in the project directory. bun writes into its
   # cache directory, so it gets a writable copy of the tree of links to the

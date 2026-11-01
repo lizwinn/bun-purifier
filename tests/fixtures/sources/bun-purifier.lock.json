@@ -2,7 +2,7 @@
   "version": 1,
   "bunVersion": "1.4.2",
   "inputsHash": "97cb62ab52f33735e6135e9168c08eab1f67180b1c769d6fab344dd2ac0ec781",
-  "artifactsHash": "91149b62cce9738d3f2a32dae0d653068d74ffc20a6eefae3ef7eed87058383b",
+  "artifactsHash": "7bf091fae3bfd7732187722d17d5e9ee797b4b179df9050997ede7fb6d061b8a",
   "packages": [
     {
       "path": "",
@@ -17,28 +17,6 @@
     }
   ],
   "artifacts": [
-    {
-      "path": "@esbuild/darwin-arm64@0.25.0@@@1",
-      "archive": {
-        "url": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.25.0.tgz",
-        "mirrors": [],
-        "stripTop": true
-      },
-      "hash": "sha512-mVwdUb5SRkPayVadIOI78K7aAnPamoeFR2bT5nszFUZ9P8UpK4ratOdYbZZXYSqPKMHfS1wdHCJk1P1EZpRdvw==",
-      "os": "darwin",
-      "cpu": "arm64"
-    },
-    {
-      "path": "@esbuild/darwin-x64@0.25.0@@@1",
-      "archive": {
-        "url": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.25.0.tgz",
-        "mirrors": [],
-        "stripTop": true
-      },
-      "hash": "sha512-DgDaYsPWFTS4S3nWpFcMn/33ZZwAAeAFKNHNa1QN0rI4pUjgqf0f7ONmXf6d22tqTY+H9FNdgeaAa+YIFUn2Rg==",
-      "os": "darwin",
-      "cpu": "x64"
-    },
     {
       "path": "@esbuild/linux-arm64@0.25.0@@@1",
       "archive": {

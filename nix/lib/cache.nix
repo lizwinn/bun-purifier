@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
 #
-# The bun install cache of a lockfile for one Nix system. Each artifact
-# the system installs is unpacked or checked out into a store path of its
-# own, and the
-# cache links each one at its cache path, the directory name bun gives
-# the package (`kleur@4.1.5@@@1`). A store path per package lets projects
-# that lock the same package share it.
+# The bun install cache of a lockfile for one Nix system. The shared
+# nix-purifiers library (`purifier`) turns each download entry the system
+# installs into a store path of its own: an archive entry into the
+# unpacked package, a git entry into the checkout. The cache links each
+# one at its cache path, the directory name bun gives the package
+# (`kleur@4.1.5@@@1`). A store path per package lets projects that lock
+# the same package share it.
 #
 # bun writes into its cache directory, so a build copies this tree of
 # links to a writable directory first. build-bun-project.nix does that,
@@ -14,59 +15,37 @@
 # It is a package for callPackage, with the lockfile among its arguments.
 {
   lib,
+  pkgs,
   runCommand,
-  gnutar,
-  gzip,
-  # Fetches the git entries. It is called with the arguments of nixpkgs'
-  # fetchgit, so a replacement with credentials takes the same ones.
-  fetchgit,
+  # The `purifier` library namespace: `fetchEntry` and `admits`.
+  purifier,
   lockFile,
   # The Nix system whose packages the cache holds.
   system,
-  # Replaces the built-in fetcher of archives; see fetch.nix.
+  # Replace nixpkgs' fetchurl and fetchgit, for credentials or mirrors.
+  # Each is called with the arguments of the nixpkgs fetcher of its name.
   fetchurl ? null,
+  fetchgit ? null,
 }:
 let
   lock = import ./lock.nix { inherit lockFile; };
-  fetch = import ./fetch.nix { inherit lock fetchurl; };
 
-  # An npm tarball holds the package in one top directory (`package/`
-  # from the npm registry, `<owner>-<repo>-<sha>/` from GitHub). bun
-  # stores the content of that directory, and the lock marks that with
-  # `archive.stripTop`.
-  unpack =
-    artifact:
-    runCommand (lock.artifactName artifact)
-      {
-        nativeBuildInputs = [
-          gnutar
-          gzip
-        ];
-        tarball = fetch artifact;
-        stripComponents = if artifact.archive.stripTop then "1" else "0";
-        preferLocalBuild = true;
-      }
-      ''
-        mkdir $out
-        tar -xzf "$tarball" -C $out --strip-components="$stripComponents" \
-          --no-same-owner --no-same-permissions
-        chmod -R u+rwX,go+rX $out
-      '';
+  fetchEntry = purifier.fetchEntry (
+    {
+      inherit pkgs;
+    }
+    // lib.optionalAttrs (fetchurl != null) { inherit fetchurl; }
+    // lib.optionalAttrs (fetchgit != null) { inherit fetchgit; }
+  );
 
   # bun keeps a git dependency as the checkout of its commit, with the
   # commit in a file `.bun-tag`, and an offline install looks for that
   # file.
-  checkout =
+  withBunTag =
     artifact:
     runCommand (lock.artifactName artifact)
       {
-        src = fetchgit {
-          name = lock.artifactName artifact + "-source";
-          inherit (artifact.git) url rev;
-          inherit (artifact) hash;
-          fetchSubmodules = artifact.git.submodules;
-          inherit (artifact.git) leaveDotGit;
-        };
+        src = fetchEntry artifact;
         inherit (artifact.git) rev;
         preferLocalBuild = true;
       }
@@ -76,14 +55,27 @@ let
         printf %s "$rev" > $out/.bun-tag
       '';
 
-  entry = artifact: if artifact ? git then checkout artifact else unpack artifact;
+  entry = artifact: if artifact ? git then withBunTag artifact else fetchEntry artifact;
+
+  # The artifacts bun installs on the system: those whose npm `os`, `cpu`
+  # and `libc` filters admit it.
+  installed = builtins.filter (
+    a:
+    purifier.admits {
+      os = a.os or null;
+      cpu = a.cpu or null;
+      libc = a.libc or null;
+    } system
+  ) lock.artifacts;
 in
+assert
+  lock.integrityProblems == [ ] || throw (builtins.concatStringsSep "\n" lock.integrityProblems);
 # The manifest goes to the builder as a file, since a large project locks
 # thousands of artifacts and the list would not fit in an environment
 # variable.
 runCommand "bun-install-cache"
   {
-    manifest = lib.concatMapStrings (a: "${a.path}\t${entry a}\n") (lock.artifactsFor system);
+    manifest = lib.concatMapStrings (a: "${a.path}\t${entry a}\n") installed;
     passAsFile = [ "manifest" ];
     preferLocalBuild = true;
     allowSubstitutes = false;

@@ -27,6 +27,9 @@ stdenvNoCC.mkDerivation {
     fileset = lib.fileset.unions [
       ../../src
       ../../nix/lib
+      # nix/lib/interactive.nix takes the revision of the shared library
+      # from it.
+      ../../flake.lock
     ];
   };
 
@@ -35,7 +38,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p $out/share/bun-purifier
-    cp -r src nix $out/share/bun-purifier/
+    cp -r src nix flake.lock $out/share/bun-purifier/
     makeWrapper ${lib.getExe bun} $out/bin/bun-purifier \
       --add-flags $out/share/bun-purifier/src/main.ts \
       --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \

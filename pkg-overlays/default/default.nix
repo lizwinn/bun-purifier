@@ -16,6 +16,8 @@ in
     final: prev:
     packages final prev
     // {
-      buildBunProject = final.callPackage ../../nix/lib/build-bun-project.nix { };
+      buildBunProject = final.callPackage ../../nix/lib/build-bun-project.nix {
+        inherit (closure-lib) purifier;
+      };
     };
 }
