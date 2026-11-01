@@ -18,7 +18,9 @@
       "git": {
         "url": "https://github.com/sindresorhus/is-plain-obj.git",
         "rev": "68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc",
-        "submodules": false
+        "submodules": false,
+        "leaveDotGit": false,
+        "commitObject": null
       },
       "hash": "sha256-OL4jmjz7jZenq9p6i72OZTStE+G7Tzu9ACk2SYxDKlE="
     }

@@ -65,6 +65,7 @@ let
           inherit (artifact.git) url rev;
           inherit (artifact) hash;
           fetchSubmodules = artifact.git.submodules;
+          inherit (artifact.git) leaveDotGit;
         };
         inherit (artifact.git) rev;
         preferLocalBuild = true;

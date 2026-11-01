@@ -55,7 +55,9 @@ type Meta = { os?: string | string[]; cpu?: string | string[] };
 export type Artifact = {
   path: string;
   archive?: { url: string; mirrors: string[]; stripTop: true };
-  git?: { url: string; rev: string; submodules: false };
+  // bun keeps the checkout without .git, so `leaveDotGit` is false and
+  // there is no commit object to rebuild .git from.
+  git?: { url: string; rev: string; submodules: false; leaveDotGit: false; commitObject: null };
   hash: string;
   os?: string | string[];
   cpu?: string | string[];
@@ -362,7 +364,11 @@ function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact
       const path = observed.git.get(rev);
       if (path === undefined) throw new LockError(`the lock run left ${id} out of the cache, so its cache path is unknown.`);
       const url = gitFetchUrl(resolution);
-      const artifact: Artifact = { path, git: { url, rev, submodules: false }, hash: gitHash(url, rev) };
+      const artifact: Artifact = {
+        path,
+        git: { url, rev, submodules: false, leaveDotGit: false, commitObject: null },
+        hash: gitHash(url, rev),
+      };
       const meta = entry[1] as Meta;
       if (meta?.os !== undefined) artifact.os = meta.os;
       if (meta?.cpu !== undefined) artifact.cpu = meta.cpu;
