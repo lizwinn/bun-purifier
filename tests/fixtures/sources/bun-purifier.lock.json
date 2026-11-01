@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "bunVersion": "1.4.2",
+  "inputsHash": "97cb62ab52f33735e6135e9168c08eab1f67180b1c769d6fab344dd2ac0ec781",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-sources",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-sources": "dist/main.js"
+      },
+      "scripts": [
+        "build"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "@esbuild/darwin-arm64@0.25.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.25.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-mVwdUb5SRkPayVadIOI78K7aAnPamoeFR2bT5nszFUZ9P8UpK4ratOdYbZZXYSqPKMHfS1wdHCJk1P1EZpRdvw==",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "path": "@esbuild/darwin-x64@0.25.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.25.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-DgDaYsPWFTS4S3nWpFcMn/33ZZwAAeAFKNHNa1QN0rI4pUjgqf0f7ONmXf6d22tqTY+H9FNdgeaAa+YIFUn2Rg==",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "path": "@esbuild/linux-arm64@0.25.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.25.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-9QAQjTWNDM/Vk2bgBl17yWuZxZNQIF0OUUuPZRKoDtqF2k4EtYbpyiG5/Dk7nqeK6kIJWPYldkOcBqjXjrUlmg==",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "path": "@esbuild/linux-x64@0.25.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.25.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-9yl91rHw/cpwMCNytUDxwj2XjFpxML0y9HAOH9pNVQDpQrBxHy01Dx+vaMu0N1CKa/RzBD2hB4u//nfc+Sd3Cw==",
+      "os": "linux",
+      "cpu": "x64"
+    },
+    {
+      "path": "@GH@sindresorhus-is-plain-obj-3b33a59@@@1",
+      "archive": {
+        "url": "https://api.github.com/repos/sindresorhus/is-plain-obj/tarball/3b33a59",
+        "stripTop": true
+      },
+      "hash": "sha512-qK8JDCU/nEf89IYCxLSqNUzGc/6PfDk5rYv0hI6GuzG0rmQ9x8lhoQX2JjswKi5K31Hf/3Dugl1IqaZI+qqzeg=="
+    },
+    {
+      "path": "@T@3b435a0b1ceadc74@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
+    },
+    {
+      "path": "esbuild@0.25.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/esbuild/-/esbuild-0.25.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-BXq5mqc8ltbaN34cDqWuYKyNhX8D/Z0J1xdtdQ8UcIIIyJyz+ZMKUt58tF3SrZ85jcfN/PZYhjR5uDQAYNVbuw=="
+    }
+  ]
+}

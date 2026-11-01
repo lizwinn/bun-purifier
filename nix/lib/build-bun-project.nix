@@ -1,0 +1,208 @@
+# SPDX-License-Identifier: MIT
+#
+# buildBunProject: the sandboxed builds of a bun project, from the
+# lockfile `bun-purifier lock` writes next to bun.lock.
+#
+# The file is a package for callPackage: the first argument set is what it
+# takes from the package set, and the result is the builder. The
+# bun-purifier overlay (`overlays.default`) adds it to the package set as
+# `buildBunProject`, so a package written for callPackage takes it like any
+# other dependency:
+#
+#   { buildBunProject }: (buildBunProject { src = ./.; }).programs.app
+#
+# and `buildBunProject.override` replaces what it takes from the set. The
+# builder returns
+#
+#   cache             the bun install cache of the locked packages that
+#                     this system installs
+#   project           the project after `bun install` and the `build`
+#                     script of each package that has one
+#   packages.<name>   the tarball of package <name>, as `bun pm pack` makes
+#                     it and `bun publish` sends it
+#   programs.<name>   the executables of package <name>'s `bin` field,
+#                     run by bun from `project`
+{
+  lib,
+  stdenvNoCC,
+  runCommand,
+  callPackage,
+  runtimeShell,
+  # The bun that installs, builds and runs the project. bun names cache
+  # entries by its own rules, so the lock records the bun version it was
+  # made with, and a different minor version draws a warning.
+  bun,
+}:
+{
+  # The root of the bun project: the directory of bun.lock.
+  src,
+  # The lockfile; the default is the one `bun-purifier lock` writes at the
+  # project root.
+  lockFile ? src + "/bun-purifier.lock.json",
+  # Replaces the built-in fetcher; see fetch.nix.
+  fetchurl ? null,
+  # The package script that builds a package. Packages without it are
+  # installed only.
+  buildScript ? "build",
+  # Runs each package's `test` script after the build.
+  doCheck ? false,
+  # Filters the project root before it is copied into the store, as the
+  # `filter` of builtins.path. The default leaves out node_modules, build
+  # outputs of bun-purifier and editor state.
+  srcFilter ? null,
+}:
+let
+  lock = import ./lock.nix {
+    inherit lockFile;
+    root = src;
+  };
+  system = stdenvNoCC.hostPlatform.system;
+
+  defaultSrcFilter =
+    path: type:
+    let
+      name = baseNameOf path;
+    in
+    !(
+      (type == "directory" && (name == "node_modules" || name == ".git"))
+      || (type == "symlink" && lib.hasPrefix "result" name)
+    );
+
+  filteredSrc = builtins.path {
+    path = src;
+    name = "source";
+    filter = if srcFilter != null then srcFilter else defaultSrcFilter;
+  };
+
+  minorVersion = v: lib.versions.majorMinor v;
+  checkedBun =
+    lib.warnIf (minorVersion bun.version != minorVersion lock.bunVersion)
+      "bun-purifier: ${toString lockFile} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
+      bun;
+
+  cache = callPackage ./cache.nix { inherit lockFile system fetchurl; };
+
+  # Packages with a name and a version: the ones `bun pm pack` can pack.
+  namedPackages = lib.attrValues lock.packagesByName;
+  workspacePackages = builtins.filter (p: p.path != "") lock.packages;
+  rootPackage = lib.findFirst (p: p.path == "") null lock.packages;
+
+  hasScript = script: p: builtins.elem script (p.scripts or [ ]);
+
+  # Runs `script` in every package that has it: the workspaces through
+  # `bun run --filter`, which orders them by their dependencies, then the
+  # root package.
+  runScript =
+    script:
+    lib.optionalString (builtins.any (hasScript script) workspacePackages) ''
+      bun run --filter '*' --elide-lines=0 ${lib.escapeShellArg script}
+    ''
+    + lib.optionalString (rootPackage != null && hasScript script rootPackage) ''
+      bun run ${lib.escapeShellArg script}
+    '';
+
+  packDir = p: lock.storeName p.name;
+
+  project = stdenvNoCC.mkDerivation {
+    pname = lock.storeName (
+      if rootPackage != null && rootPackage ? name then rootPackage.name else "bun-project"
+    );
+    version = if rootPackage != null && rootPackage ? version then rootPackage.version else "0";
+    src = filteredSrc;
+    outputs = [
+      "out"
+      "packs"
+    ];
+    nativeBuildInputs = [ checkedBun ];
+    inherit doCheck;
+
+    configurePhase = ''
+      runHook preConfigure
+      export HOME=$TMPDIR/home DO_NOT_TRACK=1
+      mkdir -p $HOME
+      # bun writes into its cache directory: a writable copy of the tree of
+      # links to the unpacked packages.
+      cp -r --no-dereference ${cache} $TMPDIR/bun-cache
+      chmod -R u+w $TMPDIR/bun-cache
+      bun install --frozen-lockfile --offline --no-progress \
+        --cache-dir=$TMPDIR/bun-cache --backend=copyfile
+      runHook postConfigure
+    '';
+
+    buildPhase = ''
+      runHook preBuild
+      ${runScript buildScript}
+      runHook postBuild
+    '';
+
+    checkPhase = ''
+      runHook preCheck
+      ${runScript "test"}
+      runHook postCheck
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      ${lib.concatMapStrings (p: ''
+        mkdir -p $packs/${packDir p}
+        (cd ./${p.path} && bun pm pack --ignore-scripts --quiet --destination $packs/${packDir p})
+      '') namedPackages}
+      mkdir -p $out
+      cp -r . $out/
+      runHook postInstall
+    '';
+
+    dontFixup = true;
+    passthru = { inherit lock cache; };
+  };
+
+  packages = lib.mapAttrs (
+    name: p:
+    runCommand "${packDir p}-${p.version}.tgz" { passthru = { inherit project; }; } ''
+      mkdir $out
+      ln -s ${project.packs}/${packDir p}/*.tgz $out/
+    ''
+  ) lock.packagesByName;
+
+  # The `bin` field of a package, as a set from executable name to path.
+  bins =
+    p:
+    if !(p ? bin) then
+      { }
+    else if builtins.isString p.bin then
+      { ${lib.last (lib.splitString "/" p.name)} = p.bin; }
+    else
+      p.bin;
+
+  programs = lib.mapAttrs (
+    name: p:
+    runCommand "${packDir p}-${p.version}"
+      {
+        meta.mainProgram = lib.head (lib.attrNames (bins p) ++ [ name ]);
+        passthru = { inherit project; };
+      }
+      ''
+        mkdir -p $out/bin
+        ${lib.concatStrings (
+          lib.mapAttrsToList (bin: target: ''
+            cat > $out/bin/${lib.escapeShellArg bin} <<EOF
+            #!${runtimeShell}
+            exec ${checkedBun}/bin/bun ${project}/${if p.path == "" then "" else "${p.path}/"}${target} "\$@"
+            EOF
+            chmod +x $out/bin/${lib.escapeShellArg bin}
+          '') (bins p)
+        )}
+      ''
+  ) (lib.filterAttrs (_: p: bins p != { }) lock.packagesByName);
+in
+assert
+  !lock.stale
+  || throw "bun-purifier: bun.lock or a package manifest under ${toString src} changed since ${toString lockFile} was made. Run `bun-purifier lock`.";
+{
+  inherit
+    cache
+    project
+    packages
+    programs
+    ;
+}

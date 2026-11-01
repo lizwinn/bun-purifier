@@ -1,0 +1,41 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "fixture-workspace",
+    },
+    "packages/app": {
+      "name": "fixture-app",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-app": "dist/main.js",
+      },
+      "dependencies": {
+        "@fixture/lib": "workspace:*",
+        "kleur": "^4.1.5",
+      },
+    },
+    "packages/lib": {
+      "name": "@fixture/lib",
+      "version": "0.1.0",
+      "dependencies": {
+        "@sindresorhus/is": "4.6.0",
+        "is-odd": "3.0.1",
+      },
+    },
+  },
+  "packages": {
+    "@fixture/lib": ["@fixture/lib@workspace:packages/lib"],
+
+    "@sindresorhus/is": ["@sindresorhus/is@4.6.0", "", {}, "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="],
+
+    "fixture-app": ["fixture-app@workspace:packages/app"],
+
+    "is-number": ["is-number@6.0.0", "", {}, "sha512-Wu1VHeILBK8KAWJUAiSZQX94GmOE45Rg6/538fKwiloUu21KncEkYGPqob2oSZ5mUT73vLGrHQjKw3KMPwfDzg=="],
+
+    "is-odd": ["is-odd@3.0.1", "", { "dependencies": { "is-number": "^6.0.0" } }, "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="],
+
+    "kleur": ["kleur@4.1.5", "", {}, "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="],
+  }
+}

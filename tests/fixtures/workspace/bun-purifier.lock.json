@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "bunVersion": "1.4.2",
+  "inputsHash": "c76983642cce4e600c95fdf1764c143ef730a1f8e9658a55700d4624a6cd47d8",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-workspace",
+      "private": true
+    },
+    {
+      "path": "packages/app",
+      "name": "fixture-app",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-app": "dist/main.js"
+      },
+      "scripts": [
+        "build"
+      ]
+    },
+    {
+      "path": "packages/lib",
+      "name": "@fixture/lib",
+      "version": "0.1.0"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "@sindresorhus/is@4.6.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/@sindresorhus/is/-/is-4.6.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="
+    },
+    {
+      "path": "is-number@6.0.0@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-Wu1VHeILBK8KAWJUAiSZQX94GmOE45Rg6/538fKwiloUu21KncEkYGPqob2oSZ5mUT73vLGrHQjKw3KMPwfDzg=="
+    },
+    {
+      "path": "is-odd@3.0.1@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
+    },
+    {
+      "path": "kleur@4.1.5@@@1",
+      "archive": {
+        "url": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="
+    }
+  ]
+}
