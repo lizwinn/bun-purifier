@@ -46,11 +46,15 @@ type Meta = { os?: string | string[]; cpu?: string | string[] };
 
 // A download in the shapes of the shared nix-purifiers library. An
 // archive entry is the archive at `archive.url`, whose SRI hash is
-// `hash`, unpacked at `path` without its single top directory. A git
-// entry is the checkout of `git.rev`, whose NAR hash is `hash`, at `path`.
+// `hash`, unpacked at `path` without its single top directory;
+// `archive.mirrors` lists other URLs of the same bytes. A git entry is
+// the checkout of `git.rev`, whose NAR hash is `hash`, at `path`.
+//
+// An npm registry keeps every published tarball at its URL, and bun.lock
+// records one URL per package, so bun's archive entries have no mirrors.
 export type Artifact = {
   path: string;
-  archive?: { url: string; stripTop: true };
+  archive?: { url: string; mirrors: string[]; stripTop: true };
   git?: { url: string; rev: string; submodules: false };
   hash: string;
   os?: string | string[];
@@ -410,7 +414,7 @@ function artifacts(root: string, bunLock: BunLock, observed: Observed): Artifact
       }
       throw new LockError(`the lock run left ${id} out of the cache, so its cache path is unknown.`);
     }
-    const artifact: Artifact = { path, archive: { url, stripTop: true }, hash: integrity };
+    const artifact: Artifact = { path, archive: { url, mirrors: [], stripTop: true }, hash: integrity };
     if (meta?.os !== undefined) artifact.os = meta.os;
     if (meta?.cpu !== undefined) artifact.cpu = meta.cpu;
     result.push(artifact);

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 #
-# The fetcher for locked artifacts. Every artifact of a bun-purifier lock
-# is an archive entry, `{ path, archive = { url, stripTop }, hash }`; this
-# fetches the archive file, and cache.nix unpacks it.
+# The fetcher for the archives of a bun-purifier lock. An archive entry is
+# `{ path, archive = { url, mirrors, stripTop }, hash }`; this fetches the
+# archive file from `url`, or from a URL of `mirrors` when `url` fails, and
+# cache.nix unpacks it.
 #
 # By default each archive is a fixed-output derivation on Nix's built-in
 # fetcher (the same derivation <nix/fetchurl.nix> makes), so neither the
@@ -14,8 +15,8 @@
 # SHA-512.
 #
 # `fetchurl`, when given, replaces the built-in fetcher. It is called with
-# { name, url, hash } and is the place for credentials (nixpkgs' fetchurl
-# takes `netrcPhase`) or mirrors.
+# { name, urls, hash }, as nixpkgs' fetchurl takes them, and is the place
+# for credentials (nixpkgs' fetchurl takes `netrcPhase`) or more mirrors.
 {
   lock,
   fetchurl ? null,
@@ -24,18 +25,18 @@ artifact:
 let
   name = lock.artifactName artifact + ".tgz";
   inherit (artifact.archive) url;
+  urls = [ url ] ++ artifact.archive.mirrors;
 in
 if fetchurl != null then
   fetchurl {
-    inherit name url;
+    inherit name urls;
     inherit (artifact) hash;
   }
 else
   derivation {
-    inherit name url;
+    inherit name url urls;
     builder = "builtin:fetchurl";
     system = "builtin";
-    urls = [ url ];
     outputHash = artifact.hash;
     outputHashMode = "flat";
     unpack = false;

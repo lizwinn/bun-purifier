@@ -30,6 +30,7 @@
       "path": "@sindresorhus/is@4.6.0@@@1",
       "archive": {
         "url": "https://registry.npmjs.org/@sindresorhus/is/-/is-4.6.0.tgz",
+        "mirrors": [],
         "stripTop": true
       },
       "hash": "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="
@@ -38,6 +39,7 @@
       "path": "is-number@6.0.0@@@1",
       "archive": {
         "url": "https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz",
+        "mirrors": [],
         "stripTop": true
       },
       "hash": "sha512-Wu1VHeILBK8KAWJUAiSZQX94GmOE45Rg6/538fKwiloUu21KncEkYGPqob2oSZ5mUT73vLGrHQjKw3KMPwfDzg=="
@@ -46,6 +48,7 @@
       "path": "is-odd@3.0.1@@@1",
       "archive": {
         "url": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
+        "mirrors": [],
         "stripTop": true
       },
       "hash": "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
@@ -54,6 +57,7 @@
       "path": "kleur@4.1.5@@@1",
       "archive": {
         "url": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
+        "mirrors": [],
         "stripTop": true
       },
       "hash": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="
