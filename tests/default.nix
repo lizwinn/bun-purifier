@@ -4,10 +4,10 @@
 # access is the fixed-output fetches of locked packages. The checks named
 # `conformance-*` are those of the nix-purifiers contract.
 {
+  # A package set with the flake's default overlay, which adds
+  # buildBunProject.
   pkgs,
-  # The builder and the lock reader, as the flake publishes them:
-  # lib.bun-purifier.buildBunProject and lib.bun-purifier.readLock.
-  buildBunProject,
+  # The lock reader, as the flake publishes it: lib.bun-purifier.readLock.
   readLock,
   # The bun-purifier command.
   bun-purifier,
@@ -18,7 +18,7 @@
 let
   inherit (pkgs) lib;
 
-  build = args: buildBunProject ({ inherit pkgs; } // args);
+  build = pkgs.buildBunProject;
   cli = lib.getExe bun-purifier;
 
   # A workspace of two packages: a library with registry dependencies (one
@@ -158,6 +158,33 @@ in
   # The built project, which `nix build --rebuild` repeats in CI
   # (tests/cli.sh rebuild).
   workspace-project = projectOf workspace;
+
+  # A package written for callPackage takes the builder by name, as a
+  # package in an overlay does, and gets the same build.
+  builder-by-callpackage =
+    let
+      withPackage = pkgs.extend (
+        final: prev: {
+          example = final.callPackage (
+            { buildBunProject }: (buildBunProject { src = ./fixtures/workspace; }).packages.fixture-app
+          ) { };
+        }
+      );
+    in
+    assert withPackage.example.drvPath == workspace.packages.fixture-app.drvPath;
+    marker "builder-by-callpackage";
+
+  # buildBunProject.override replaces what the builder takes from the
+  # package set: here the bun the project builds with.
+  builder-override =
+    let
+      markerBun = pkgs.runCommand "marker-bun" { passthru.version = pkgs.bun.version; } "mkdir $out";
+      overridden = (pkgs.buildBunProject.override { bun = markerBun; }) { src = ./fixtures/workspace; };
+    in
+    assert builtins.elem markerBun.drvPath (
+      map (d: d.drvPath) (projectOf overridden).nativeBuildInputs
+    );
+    marker "builder-override";
 
   sources-program =
     runs "sources-program" sources.packages.fixture-sources.executables.fixture-sources

@@ -25,8 +25,8 @@
   src,
   # The project inside `src`; "" when `src` is the project.
   root ? "",
-  # The lockfile; null names bun-purifier.lock.json at the project root.
-  lockFile ? null,
+  # The lockfile, by default bun-purifier.lock.json at the project root.
+  lockFile ? (if root == "" then src else src + "/${root}") + "/bun-purifier.lock.json",
   # The project's bun.lock, when it is not at the project root.
   bunLock ? null,
 }:
@@ -35,7 +35,7 @@ let
 
   lock = import ./lock.nix (
     {
-      lockFile = if lockFile != null then lockFile else projectSrc + "/bun-purifier.lock.json";
+      inherit lockFile;
       root = projectSrc;
     }
     // lib.optionalAttrs (bunLock != null) { inherit bunLock; }

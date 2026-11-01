@@ -22,7 +22,15 @@ lock writes `bun-purifier.lock.json`, commit it.
 nix run github:nix-purifiers/bun-purifier -- lock
 ```
 
-Build it with the builder in the flake's library:
+The flake's `overlays.default` adds `buildBunProject` to a package set,
+and a package written for `callPackage` takes it by name, like any other
+builder:
+
+```nix
+# package.nix
+{ buildBunProject }:
+(buildBunProject { src = ./.; }).packages.my-app
+```
 
 ```nix
 {
@@ -32,19 +40,24 @@ Build it with the builder in the flake's library:
   outputs = { nixpkgs, bun-purifier, ... }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      app = bun-purifier.lib.bun-purifier.buildBunProject {
-        inherit pkgs;
-        src = ./.;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          bun-purifier.overlays.default
+          (final: prev: { my-app = final.callPackage ./package.nix { }; })
+        ];
       };
     in
     {
-      packages.${system}.default = app.packages.my-app;
+      packages.${system}.default = pkgs.my-app;
     };
 }
 ```
 
-`buildBunProject { pkgs, src, fetchers ? { }, ... }` returns
+The builder takes what it needs from the package set, such as `bun`,
+`stdenvNoCC` and `fetchurl`, so `buildBunProject.override` replaces any
+of them. `buildBunProject { src, lockFile ? ..., fetchers ? { }, ... }`
+returns
 
 - `packages.<name>`: package `<name>`, built: its directory in the built
   project at `lib/node_modules/<name>`, and the executables of its `bin`
@@ -66,7 +79,7 @@ reads the name, version and `bin` field of each from its `package.json`.
 `nix/lib/build-bun-project.nix` documents the other arguments:
 
 - `root`: the project inside `src`, for `file:` dependencies outside the
-  project (see Sources supported and refused).
+  project (see Supported language repositories).
 - `lockFile` and `bunLock`: the two lockfiles, when they are not at the
   project root. A packaging flake keeps them outside `src` to build a
   project whose author does not use bun-purifier, and a `bunLock` given
@@ -78,9 +91,9 @@ reads the name, version and `bin` field of each from its `package.json`.
   test, `build` and `test` by default.
 - `srcFilter`: filters the source before it is copied into the store.
 
-The build takes bun from `pkgs`. Executables in `node_modules` start with
-`#!/usr/bin/env node`, and the sandbox has no `/usr/bin/env`, so the
-build rewrites those lines to a `node` that is that bun.
+The build runs the package set's bun. Executables in `node_modules`
+start with `#!/usr/bin/env node`, and the sandbox has no `/usr/bin/env`,
+so the build rewrites those lines to a `node` that is that bun.
 
 ### How the lock is made
 
@@ -120,9 +133,9 @@ reads both lockfiles into the shape every nix-purifier gives:
 the systems install carries `systems`. The builder checks this lock with
 `checkLock` of the shared library and fetches the entries of its system.
 
-## Everyday loop
+## Development loop
 
-The everyday loop is bun's own: `bun install`, `bun run build`,
+The development loop is bun's own: `bun install`, `bun run build`,
 `bun test`. Add or upgrade a dependency with `bun add`, which updates
 `bun.lock` over the network. A project without `bun-purifier.lock.json`
 needs nothing more, since Nix reads the new package from `bun.lock`. A
@@ -141,13 +154,13 @@ against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
 `bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
 `bun-purifier lock`, and so does the Nix build.
 
-## Offline work
+## Working offline
 
 ```zsh
 nix run github:nix-purifiers/bun-purifier -- prefetch
 ```
 
-`prefetch` builds, in the Nix store, every package the lockfile lists for
+`prefetch` builds, in the Nix store, every package `bun.lock` lists for
 the current system, keeps them alive with a GC root in
 `node_modules/.cache/bun-purifier`, and runs
 `bun install --frozen-lockfile --offline` from them. Further arguments go
@@ -160,10 +173,10 @@ lock needs the network, as it does without bun-purifier.
 `prefetch` leaves `node_modules` with ordinary files, so an editor's
 TypeScript server, and `tsc`, read the installed types as after a plain
 `bun install`. bun projects bring TypeScript and their `@types` packages
-as dependencies, so the lockfile holds what the editor reads, and it is
+as dependencies, so `bun.lock` holds what the editor reads, and it is
 there after `prefetch`.
 
-## Errors and fixes
+## Troubleshooting
 
 Every check names the command that fixes it, in the command and in the
 Nix build:
@@ -183,7 +196,7 @@ working directory, or of the one named with `--package`, and runs
 `bun publish` with it in the package's directory. Registry configuration
 and credentials work as they do for `bun publish`.
 
-## Sources supported and refused
+## Supported language repositories
 
 Every kind of dependency `bun.lock` records builds, except one:
 
@@ -252,9 +265,11 @@ Then add a `flake.nix` that builds the package and its release tarball:
   outputs = { nixpkgs, bun-purifier, ... }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      elysia = bun-purifier.lib.bun-purifier.buildBunProject {
-        inherit pkgs;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ bun-purifier.overlays.default ];
+      };
+      elysia = pkgs.buildBunProject {
         src = ./.;
         testScript = "test:types";
       };

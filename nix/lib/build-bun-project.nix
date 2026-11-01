@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: MIT
 #
 # buildBunProject: the sandboxed builds of a bun project, from bun.lock and
-# the lockfile `bun-purifier lock` writes next to it. The library overlay
-# publishes it as `lib.bun-purifier.buildBunProject`:
+# the lockfile `bun-purifier lock` writes next to it.
 #
-#   (lib.bun-purifier.buildBunProject { inherit pkgs; src = ./.; }).packages.app
+# The file is a package for callPackage: the first argument set is what it
+# takes from the package set, and the result is the builder. The
+# bun-purifier overlay (`overlays.default`) adds it to the package set as
+# `buildBunProject`, so a package written for callPackage takes it like any
+# other builder:
 #
-# The builder returns
+#   { buildBunProject }: (buildBunProject { src = ./.; }).packages.app
+#
+# and `buildBunProject.override` replaces what it takes from the set, such
+# as `bun`. The builder returns
 #
 #   packages.<name>   package <name>, built: its directory in the built
 #                     project at `lib/node_modules/<name>`, and the
@@ -22,12 +28,22 @@
 #                     for; an entry needed on only some carries `systems`
 {
   lib,
+  stdenvNoCC,
+  runCommand,
+  runtimeShell,
+  # The bun that installs, builds, tests and runs the project.
+  bun,
+  # The fetchers of the download entries, unless `fetchers` replaces them.
+  fetchurl,
+  fetchgit,
+  # The package set that `fetchEntry` of the shared library unpacks
+  # archives with.
+  pkgs,
   # The `purifier` library namespace of the shared nix-purifiers library.
+  # The overlay passes the one of the bun-purifier flake.
   purifier,
 }:
 {
-  # The package set the build takes bun, stdenv and the fetchers from.
-  pkgs,
   # The source tree: the bun project, the directory of bun.lock, or a
   # directory above it that also holds the `file:` dependencies outside
   # the project.
@@ -35,19 +51,19 @@
   # The project inside `src`, as a relative path; "" when `src` is the
   # project.
   root ? "",
-  # The lockfile; null names the one `bun-purifier lock` writes at the
+  # The lockfile, by default the one `bun-purifier lock` writes at the
   # project root. A packaging flake can keep it outside `src`, for a
   # project whose author does not use bun-purifier. The lock writes no
   # lockfile when bun.lock records everything, and the build then reads
   # bun.lock alone.
-  lockFile ? null,
+  lockFile ? (if root == "" then src else src + "/${root}") + "/bun-purifier.lock.json",
   # The project's bun.lock, when `src` has none or holds another one; null
   # names the one at the project root. A file given here replaces any
   # bun.lock in `src` for the build.
   bunLock ? null,
-  # Fetchers in place of nixpkgs' own, passed unchanged to `fetchEntry` of
-  # the shared library: `fetchurl` for a registry mirror or credentials,
-  # `fetchgit` for a private git repository.
+  # Fetchers in place of the package set's own, passed unchanged to
+  # `fetchEntry` of the shared library: `fetchurl` for a registry mirror or
+  # credentials, `fetchgit` for a private git repository.
   fetchers ? { },
   # The package script that builds a package. Packages without it are
   # installed only.
@@ -60,18 +76,14 @@
   srcFilter ? null,
 }:
 let
-  inherit (pkgs) stdenvNoCC runCommand runtimeShell;
-  bun = pkgs.bun;
-
   projectSrc = if root == "" then src else src + "/${root}";
   # The project directory in the build and in `project`.
   rootPrefix = if root == "" then "" else "${root}/";
-  lockPath = if lockFile != null then lockFile else projectSrc + "/bun-purifier.lock.json";
-  lockName = baseNameOf (toString lockPath);
+  lockName = baseNameOf (toString lockFile);
 
   lock = import ./lock.nix (
     {
-      lockFile = lockPath;
+      inherit lockFile;
       root = projectSrc;
     }
     // lib.optionalAttrs (bunLock != null) { inherit bunLock; }
@@ -110,7 +122,7 @@ let
   minorVersion = v: lib.versions.majorMinor v;
   checkedBun =
     lib.warnIf (lock.bunVersion != null && minorVersion bun.version != minorVersion lock.bunVersion)
-      "bun-purifier: ${toString lockPath} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
+      "bun-purifier: ${toString lockFile} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
       bun;
 
   # Executables in node_modules start with `#!/usr/bin/env node`, and the
@@ -123,7 +135,11 @@ let
   '';
 
   cache = import ./cache.nix { inherit lib purifier; } {
-    inherit pkgs fetchers;
+    inherit pkgs;
+    fetchers = {
+      inherit fetchurl fetchgit;
+    }
+    // fetchers;
     entries = purifier.entriesFor system checkedLock;
   };
 

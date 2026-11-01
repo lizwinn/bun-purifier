@@ -56,8 +56,10 @@
           { pkgs, system, ... }:
           {
             checks = import ../../../tests {
-              inherit pkgs;
-              inherit (self.lib.bun-purifier) buildBunProject readLock;
+              # The fixtures take the builder from the package set that
+              # the default overlay extends.
+              pkgs = pkgs.extend self.overlays.default;
+              inherit (self.lib.bun-purifier) readLock;
               inherit (self.packages.${system}) bun-purifier;
               realWorld = { inherit (inputs) elysia; };
             };

@@ -40,8 +40,8 @@ in
 
   release =
     let
-      build = import ./build-bun-project.nix { inherit lib purifier; } {
-        inherit pkgs;
+      buildBunProject = pkgs.callPackage ./build-bun-project.nix { inherit purifier; };
+      build = buildBunProject {
         src = /. + src;
         lockFile = /. + lockFile;
       };
