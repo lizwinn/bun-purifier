@@ -17,8 +17,9 @@
 #   release.<name>    the tarball of package <name>, as `bun pm pack` makes
 #                     it and `bun-purifier publish` uploads it. `tarball` is
 #                     the path of the file.
-#   fetches           the download entries of the shared nix-purifiers
-#                     library that the build fetches on this system
+#   fetches           the download entries of the lock (`entries` of
+#                     readLock), for every system the nix-purifiers build
+#                     for; an entry needed on only some carries `systems`
 {
   lib,
   # The `purifier` library namespace of the shared nix-purifiers library.
@@ -36,7 +37,9 @@
   root ? "",
   # The lockfile; null names the one `bun-purifier lock` writes at the
   # project root. A packaging flake can keep it outside `src`, for a
-  # project whose author does not use bun-purifier.
+  # project whose author does not use bun-purifier. The lock writes no
+  # lockfile when bun.lock records everything, and the build then reads
+  # bun.lock alone.
   lockFile ? null,
   # The project's bun.lock, when `src` has none or holds another one; null
   # names the one at the project root. A file given here replaces any
@@ -75,6 +78,19 @@ let
   );
   system = stdenvNoCC.hostPlatform.system;
 
+  # The lock in the shape every nix-purifier gives, checked by the shared
+  # library, which fails evaluation with its problems.
+  checkedLock = purifier.checkLock (
+    import ./read-lock.nix { inherit lib purifier; } {
+      inherit
+        src
+        root
+        lockFile
+        bunLock
+        ;
+    }
+  );
+
   defaultSrcFilter =
     path: type:
     let
@@ -93,7 +109,7 @@ let
 
   minorVersion = v: lib.versions.majorMinor v;
   checkedBun =
-    lib.warnIf (minorVersion bun.version != minorVersion lock.bunVersion)
+    lib.warnIf (lock.bunVersion != null && minorVersion bun.version != minorVersion lock.bunVersion)
       "bun-purifier: ${toString lockPath} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
       bun;
 
@@ -107,8 +123,8 @@ let
   '';
 
   cache = import ./cache.nix { inherit lib purifier; } {
-    inherit pkgs system fetchers;
-    lockFile = lockPath;
+    inherit pkgs fetchers;
+    entries = purifier.entriesFor system checkedLock;
   };
 
   # The offline install, run in the project directory. bun writes into its
@@ -287,8 +303,9 @@ let
     lib.extendDerivation true { tarball = "${drv}/${packFile p}"; } drv
   ) lock.packagesByName;
 in
-assert lock.problems == [ ] || throw (builtins.concatStringsSep "\n" lock.problems);
-{
+# checkLock fails evaluation with the problems of the lock, before any
+# attribute of the result is read.
+builtins.seq checkedLock {
   inherit packages tests release;
-  fetches = cache.entries;
+  fetches = checkedLock.entries;
 }

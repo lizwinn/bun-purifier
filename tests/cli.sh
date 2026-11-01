@@ -90,14 +90,24 @@ offline_loop() {
 }
 
 loop() {
-  cp -r tests/fixtures/workspace "$work/loop"
-  (cd "$work/loop" && "$cli" prefetch && "$cli" prefetch)
-  (cd "$work/loop/packages/lib" && "$bun" add ms@2.1.3)
-  (cd "$work/loop" && fails_with 'Run `bun-purifier lock`' "$cli" prefetch)
-  (cd "$work/loop" && "$cli" lock && "$cli" prefetch)
-  grep -F '"url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"' "$work/loop/bun-purifier.lock.json" > /dev/null
-  sed -i 's/"hash": "sha512-W/"hash": "sha512-X/' "$work/loop/bun-purifier.lock.json"
-  (cd "$work/loop" && fails_with 'bun-purifier lock --force' "$cli" prefetch)
+  # A project whose bun.lock records everything has no lockfile, so after
+  # `bun add` the next prefetch reads the new package from bun.lock.
+  cp -r tests/fixtures/workspace "$work/plain"
+  (cd "$work/plain" && "$cli" prefetch && "$cli" prefetch)
+  (cd "$work/plain/packages/lib" && "$bun" add ms@2.1.3)
+  (cd "$work/plain" && "$cli" prefetch)
+  (cd "$work/plain" && "$cli" lock) 2>&1 | grep -F "no lockfile to write"
+  test ! -e "$work/plain/bun-purifier.lock.json"
+
+  # A project with a lockfile refuses it once bun.lock changes, until the
+  # lock runs again, and refuses a lockfile edited by hand.
+  cp -r tests/fixtures/registries "$work/facts"
+  (cd "$work/facts" && "$cli" prefetch)
+  (cd "$work/facts" && "$bun" add ms@2.1.3)
+  (cd "$work/facts" && fails_with 'Run `bun-purifier lock`' "$cli" prefetch)
+  (cd "$work/facts" && "$cli" lock && "$cli" prefetch)
+  sed -i 's/yarnpkg/yarnpkh/' "$work/facts/bun-purifier.lock.json"
+  (cd "$work/facts" && fails_with 'bun-purifier lock --force' "$cli" prefetch)
 }
 
 publish() {
@@ -127,6 +137,7 @@ nix_errors() {
   nixpkgs=$(grep -o "BUN_PURIFIER_NIXPKGS='[^']*'" "$cli" | cut -d"'" -f2)
   fails_with 'not valid JSON. Run `bun-purifier lock --force`' \
     nix build --no-link --file "$lib/interactive.nix" --argstr nixpkgs "$nixpkgs" \
+    --argstr src "$PWD/tests/negative/malformed" \
     --argstr lockFile "$PWD/tests/negative/malformed/bun-purifier.lock.json" cache
 }
 

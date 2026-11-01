@@ -11,10 +11,11 @@
 {
   nixpkgs,
   system ? builtins.currentSystem,
-  # The project's lockfile, for both.
-  lockFile ? null,
-  # The project root and a package name, for `release`.
-  src ? null,
+  # The project root, which holds bun.lock and the package manifests.
+  src,
+  # The project's lockfile, which need not exist.
+  lockFile,
+  # A package name, for `release`.
   package ? null,
 }:
 let
@@ -25,11 +26,16 @@ let
   locked = flakeLock.nodes.${flakeLock.nodes.root.inputs.purifier}.locked;
   purifierFlake = builtins.getFlake "github:${locked.owner}/${locked.repo}/${locked.rev}?narHash=${locked.narHash}";
   inherit (purifierFlake.lib) purifier;
+
+  lock = import ./read-lock.nix { inherit lib purifier; } {
+    src = /. + src;
+    lockFile = /. + lockFile;
+  };
 in
 {
   cache = import ./cache.nix { inherit lib purifier; } {
-    inherit pkgs system;
-    lockFile = /. + lockFile;
+    inherit pkgs;
+    entries = purifier.entriesFor system lock;
   };
 
   release =

@@ -1,29 +1,11 @@
 {
-  "version": 2,
+  "version": 3,
   "bunVersion": "1.4.2",
-  "inputsHash": "a80ad126c128ba7d6126cd86c401b783a6cfdb0ced3f4ed0df586dfe5931e36a",
-  "packages": [
-    {
-      "path": "",
-      "name": "fixture-paths",
-      "version": "1.0.0",
-      "bin": {
-        "fixture-paths": "main.js"
-      }
-    }
-  ],
-  "artifacts": [
-    {
-      "path": "@G@68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc",
-      "git": {
-        "url": "https://github.com/sindresorhus/is-plain-obj.git",
-        "rev": "68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc",
-        "submodules": false,
-        "leaveDotGit": false,
-        "commitObject": null
-      },
-      "hash": "sha256-OL4jmjz7jZenq9p6i72OZTStE+G7Tzu9ACk2SYxDKlE="
-    }
-  ],
-  "contentHash": "e25a92594e0ce79927eec1e55f3086a62a0614bc117379b8cebd5d72a810b330"
+  "bunLockHash": "32d411bb7f89f696b7a80c6350fd56193592cc26d0351363ff77397f78626fc5",
+  "cachePaths": {},
+  "gitHashes": {
+    "is-plain-obj": "sha256-OL4jmjz7jZenq9p6i72OZTStE+G7Tzu9ACk2SYxDKlE="
+  },
+  "notInstalled": [],
+  "contentHash": "edc8ecaa9834fe8e7a364a883d0b96289c2322058e4658d0ae0f99dda8a10758"
 }

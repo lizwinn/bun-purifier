@@ -5,8 +5,10 @@
 # `conformance-*` are those of the nix-purifiers contract.
 {
   pkgs,
-  # The builder, as the flake publishes it: lib.bun-purifier.buildBunProject.
+  # The builder and the lock reader, as the flake publishes them:
+  # lib.bun-purifier.buildBunProject and lib.bun-purifier.readLock.
   buildBunProject,
+  readLock,
   # The bun-purifier command.
   bun-purifier,
   # The sources of the real-world projects, pinned in
@@ -78,9 +80,10 @@ let
     '';
 
   # Lockfiles broken the ways a developer breaks them, each a copy of the
-  # workspace fixture: a manifest changed after the lock, a hash edited by
-  # hand, a merge conflict, a truncated file, and an entry missing with the
-  # digest recomputed, as a bug in the lock would leave it.
+  # sources fixture, whose lockfile records the cache path of a tarball
+  # dependency: bun.lock changed after the lock, the path edited by hand, a
+  # merge conflict, a truncated file, and the path missing with the digest
+  # recomputed, as a bug in the lock would leave it.
   negativeLock =
     name:
     import ../nix/lib/lock.nix {
@@ -190,6 +193,25 @@ in
         touch $out
       '';
 
+  # readLock gives the lock in the shape of the contract. esbuild's binary
+  # for each system carries that system, and the outputs name the package.
+  read-lock =
+    let
+      lock = readLock { src = ./fixtures/sources; };
+      systemsOf =
+        path: (lib.findFirst (e: e.path == path) (throw "no entry ${path}") lock.entries).systems or null;
+    in
+    assert lock.purifier == "bun-purifier";
+    assert lock.problems == [ ];
+    assert systemsOf "@esbuild/linux-x64@0.25.0@@@1" == [ "x86_64-linux" ];
+    assert systemsOf "@esbuild/linux-arm64@0.25.0@@@1" == [ "aarch64-linux" ];
+    assert systemsOf "esbuild@0.25.0@@@1" == null;
+    assert lib.assertMsg (
+      !(builtins.any (e: lib.hasPrefix "@esbuild/darwin" e.path) lock.entries)
+    ) "readLock kept an entry no system installs";
+    assert lock.outputs.fixture-sources.version == "1.0.0";
+    marker "read-lock";
+
   # `fetches` lists the library entries of the build, by path.
   workspace-fetches =
     assert lib.assertMsg (
@@ -277,28 +299,13 @@ in
     assert lib.assertMsg (buildFails "tampered") "a tampered lockfile did not stop the build";
     commandFails "tampered" "prefetch" "bun-purifier lock --force";
 
-  # A lockfile without a package bun needs passes the digest check, and
-  # the offline install then fails with a message that says to relock.
+  # A lockfile without the cache path of a tarball dependency passes the
+  # digest check and fails the build, naming `bun-purifier lock`.
   conformance-missing =
-    let
-      project = projectOf (build {
-        src = ./negative/missing-entry;
-      });
-    in
-    assert (negativeLock "missing-entry").problems == [ ];
-    pkgs.runCommand "test-conformance-missing" { nativeBuildInputs = [ pkgs.bun ]; } ''
-      export HOME=$TMPDIR
-      cp -r ${./negative/missing-entry} project
-      chmod -R u+w project
-      cd project
-      if (${project.installScript}) 2> err; then
-        echo "the install succeeded without is-number"
-        exit 1
-      fi
-      cat err
-      grep 'run `bun-purifier lock --force`' err
-      touch $out
-    '';
+    assert expectProblem "missing-entry" "no cache path for the tarball dependency ms";
+    assert expectProblem "missing-entry" "Run `bun-purifier lock`";
+    assert lib.assertMsg (buildFails "missing-entry") "an incomplete lockfile did not stop the build";
+    marker "conformance-missing";
 
   # A lockfile that is not valid fails, naming `bun-purifier lock --force`:
   # a merge conflict in the Nix build and the command, and a truncated file
@@ -323,7 +330,9 @@ in
     cp -r ${./fixtures} fixtures
     cp -r ${./external} external
     chmod -R u+w fixtures external
-    for fixture in workspace sources paths/app registries; do
+    # The workspace fixture has no lockfile: bun.lock records everything.
+    test ! -e fixtures/workspace/bun-purifier.lock.json
+    for fixture in sources paths/app registries; do
       (cd fixtures/$fixture && ${cli} lock) 2> out
       grep -q "is current" out || { cat out; exit 1; }
     done
@@ -367,5 +376,5 @@ in
   # kept outside it, together with a bun.lock kept outside it.
   conformance-external =
     runs "conformance-external" external.packages.fixture-external.executables.fixture-external
-      "built from a lockfile outside its source";
+      "built from a lockfile outside its source, 60000 ms";
 }

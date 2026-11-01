@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// rmSync also removes cache entries of the fixtures below.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseJsonc } from "../../src/jsonc";
@@ -14,13 +15,14 @@ import {
   LOCK_FILE,
   LOCK_VERSION,
   LockError,
-  artifacts,
+  bunLockHash,
   cacheHost,
   contentHash,
   canonicalJson,
   defaultRegistry,
+  facts,
   gitFetchUrl,
-  inputsHash,
+  hasFacts,
   localPath,
   observe,
   outsidePaths,
@@ -134,7 +136,7 @@ describe("registries", () => {
   });
 });
 
-describe("artifacts", () => {
+describe("facts", () => {
   // A lock run's cache for a bun.lock with one package of each kind.
   function project(): { bunLock: BunLock; cache: string } {
     const cache = "cache";
@@ -164,57 +166,70 @@ describe("artifacts", () => {
     return { bunLock, cache: join(dir, cache) };
   }
 
-  test("maps every downloaded package to its cache path and URL", () => {
+  test("records only the cache paths that Nix cannot derive", () => {
     const { bunLock, cache } = project();
-    const locked = artifacts(dir, bunLock, observe(cache));
-    expect(locked.map((a) => [a.path, a.archive?.url, a.hash])).toEqual([
-      [
-        "@GH@owner-repo-abc1234@@@1",
-        "https://api.github.com/repos/owner/repo/tarball/abc1234",
-        "sha512-repo",
-      ],
-      ["@scope/is@1.0.0@@registry.example.com@@@1", "https://registry.example.com/@scope/is/-/is-1.0.0.tgz", "sha512-is"],
-      ["@T@3b435a0b1ceadc74@@@1", "https://example.com/tarred-2.0.0.tgz", "sha512-tarred"],
-      ["kleur@4.1.5@@@1", "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz", "sha512-kleur"],
-      ["ms@3.0.0-684001923c4f8651@@@1", "https://registry.npmjs.org/ms/-/ms-3.0.0-canary.1.tgz", "sha512-ms"],
-    ]);
+    expect(facts(dir, bunLock, observe(cache)).cachePaths).toEqual({
+      ms: "ms@3.0.0-684001923c4f8651@@@1",
+      tarred: "@T@3b435a0b1ceadc74@@@1",
+    });
   });
 
-  test("every archive entry strips its top directory and has no mirrors", () => {
-    const { bunLock, cache } = project();
-    for (const a of artifacts(dir, bunLock, observe(cache))) {
-      expect(a.archive).toMatchObject({ mirrors: [], stripTop: true });
-    }
+  test("records no facts for a project of plain registry packages", () => {
+    const { cache } = project();
+    const bunLock: BunLock = {
+      lockfileVersion: 1,
+      workspaces: {},
+      packages: { kleur: ["kleur@4.1.5", "", {}, "sha512-kleur"] },
+    };
+    rmSync(join(cache, "ms@3.0.0-684001923c4f8651@@@1"), { recursive: true });
+    rmSync(join(cache, "@T@3b435a0b1ceadc74@@@1"), { recursive: true });
+    rmSync(join(cache, "@GH@owner-repo-abc1234@@@1"), { recursive: true });
+    rmSync(join(cache, "@T@9895b98ad6776dd3@@@1"), { recursive: true });
+    rmSync(join(cache, "@scope"), { recursive: true });
+    expect(hasFacts(facts(dir, bunLock, observe(cache)))).toBe(false);
   });
 
-  test("leaves out packages the lock run did not install", () => {
+  test("records a package the lock run did not install, unless its filters exclude it", () => {
     const { bunLock, cache } = project();
-    expect(artifacts(dir, bunLock, observe(cache)).some((a) => a.path.startsWith("wasm"))).toBe(false);
+    bunLock.packages.fallback = ["fallback@1.0.0", "", {}, "sha512-fallback"];
+    expect(facts(dir, bunLock, observe(cache)).notInstalled).toEqual(["fallback"]);
+  });
+
+  test("records a default registry other than npm", () => {
+    const { bunLock, cache } = project();
+    write(".npmrc", "registry=https://registry.example.com/\n");
+    rmSync(join(cache, "kleur@4.1.5@@@1"), { recursive: true });
+    rmSync(join(cache, "ms@3.0.0-684001923c4f8651@@@1"), { recursive: true });
+    entry("cache", "kleur@4.1.5@@registry.example.com@@@1", "kleur", "4.1.5");
+    entry("cache", "ms@3.0.0-684001923c4f8651@@registry.example.com@@@1", "ms", "3.0.0-canary.1");
+    const found = facts(dir, bunLock, observe(cache));
+    expect(found.defaultRegistry).toBe("https://registry.example.com/");
+    expect(found.cachePaths.kleur).toBeUndefined();
   });
 
   test("rejects a cache entry that matches no package", () => {
     const { bunLock, cache } = project();
     entry("cache", "stray@1.0.0@@@1", "stray", "1.0.0");
-    expect(() => artifacts(dir, bunLock, observe(cache))).toThrow(/match no entry of bun.lock/);
+    expect(() => facts(dir, bunLock, observe(cache))).toThrow(/match no entry of bun.lock/);
   });
 
   test("rejects two entries for one cache path that disagree", () => {
     const { bunLock, cache } = project();
     bunLock.packages["app/kleur"] = ["kleur@4.1.5", "", {}, "sha512-other"];
-    expect(() => artifacts(dir, bunLock, observe(cache))).toThrow(/two entries for the cache entry/);
+    expect(() => facts(dir, bunLock, observe(cache))).toThrow(/two entries for the cache entry/);
   });
 
   test("rejects link: dependencies with the reason", () => {
     const { bunLock, cache } = project();
     bunLock.packages.linked = ["linked@link:linked", {}];
-    expect(() => artifacts(dir, bunLock, observe(cache))).toThrow(/registered with `bun link`/);
+    expect(() => facts(dir, bunLock, observe(cache))).toThrow(/registered with `bun link`/);
   });
 
   test("rejects a package without an integrity hash", () => {
     const { bunLock, cache } = project();
     bunLock.packages.kleur = ["kleur@4.1.5", "", {}];
     delete bunLock.packages["app/kleur"];
-    expect(() => artifacts(dir, bunLock, observe(cache))).toThrow(/no integrity hash/);
+    expect(() => facts(dir, bunLock, observe(cache))).toThrow(/no integrity hash/);
   });
 });
 
@@ -223,24 +238,23 @@ describe("digests", () => {
     expect(canonicalJson({ b: [1, { d: null, c: "x" }], a: true })).toBe('{"a":true,"b":[1,{"c":"x","d":null}]}');
   });
 
-  test("the inputs digest changes with a manifest", () => {
+  test("the bun.lock digest changes with bun.lock", () => {
     write("bun.lock", "{}");
-    write("package.json", '{ "name": "a" }');
-    const before = inputsHash(dir, [{ path: "" }]);
-    write("package.json", '{ "name": "b" }');
-    expect(inputsHash(dir, [{ path: "" }])).not.toBe(before);
+    const before = bunLockHash(dir);
+    write("bun.lock", '{ "lockfileVersion": 1 }');
+    expect(bunLockHash(dir)).not.toBe(before);
   });
 });
 
 describe("readLock", () => {
   function lockfile(edit: (lock: Record<string, unknown>) => void = () => {}): void {
-    const artifacts = [{ path: "a@1.0.0@@@1", archive: { url: "https://x/a.tgz", mirrors: [], stripTop: true }, hash: "sha512-a" }];
     const content = {
       version: LOCK_VERSION,
       bunVersion: Bun.version,
-      inputsHash: "",
-      packages: [],
-      artifacts,
+      bunLockHash: "",
+      cachePaths: { ms: "ms@3.0.0-684001923c4f8651@@@1" },
+      gitHashes: {},
+      notInstalled: [],
     };
     const lock: Record<string, unknown> = { ...content, contentHash: contentHash(content as never) };
     edit(lock);
@@ -251,7 +265,7 @@ describe("readLock", () => {
 
   test("reads a lockfile", () => {
     lockfile();
-    expect(readLock(file())?.artifacts.length).toBe(1);
+    expect(readLock(file())?.cachePaths.ms).toBe("ms@3.0.0-684001923c4f8651@@@1");
   });
   test("returns nothing without a lockfile", () => expect(readLock(file())).toBeUndefined());
   test("names a merge conflict", () => {
@@ -266,14 +280,14 @@ describe("readLock", () => {
     lockfile((lock) => (lock.version = 0));
     expect(() => readLock(file())).toThrow(/lock format version 0/);
   });
-  test("names a hand-edited hash", () => {
-    lockfile((lock) => ((lock.artifacts as { hash: string }[])[0].hash = "sha512-tampered"));
+  test("names a hand-edited entry", () => {
+    lockfile((lock) => ((lock.cachePaths as Record<string, string>).ms = "ms@3.0.0@@@1"));
     expect(() => readLock(file())).toThrow(LockError);
     expect(() => readLock(file())).toThrow(/edited after the lock.*bun-purifier lock --force/);
   });
   test("reads a lockfile outside the project by its own name", () => {
     lockfile();
     write("elsewhere/app.lock.json", JSON.stringify(readLock(file())));
-    expect(readLock(join(dir, "elsewhere/app.lock.json"))?.artifacts.length).toBe(1);
+    expect(readLock(join(dir, "elsewhere/app.lock.json"))?.cachePaths.ms).toBe("ms@3.0.0-684001923c4f8651@@@1");
   });
 });

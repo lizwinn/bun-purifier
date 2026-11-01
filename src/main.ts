@@ -32,7 +32,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { isCurrent, LOCK_FILE, LockError, lock, readLock } from "./lock";
+import { isStale, LOCK_FILE, LockError, lock, lockedPackages, readBunLock, readLock } from "./lock";
 
 const usage = `usage:
   bun-purifier lock [--lockfile <path>] [--force]
@@ -82,9 +82,11 @@ function nixBuild(root: string, args: string[], outLink?: string): string {
   return result.stdout.toString().trim().split("\n")[0];
 }
 
+// A project without a lockfile builds from bun.lock alone, so only a
+// lockfile older than bun.lock stops a command.
 function requireCurrentLock(root: string, file: string): void {
-  if (!isCurrent(root, readLock(file))) {
-    fail(`${basename(file)} is missing or older than bun.lock and the package manifests. Run \`bun-purifier lock\`.`);
+  if (isStale(root, readLock(file))) {
+    fail(`${basename(file)} is older than bun.lock, or was made with another bun. Run \`bun-purifier lock\`.`);
   }
 }
 
@@ -134,7 +136,7 @@ function prefetch(root: string, file: string, args: string[]): void {
   mkdirSync(dir, { recursive: true });
   const cache =
     process.env.BUN_PURIFIER_CACHE ||
-    nixBuild(root, ["--argstr", "lockFile", file, "cache"], join(dir, "result"));
+    nixBuild(root, ["--argstr", "src", root, "--argstr", "lockFile", file, "cache"], join(dir, "result"));
   // bun writes into its cache directory: a writable copy of the tree of
   // links to the unpacked packages.
   const writable = join(dir, "bun-cache");
@@ -146,7 +148,7 @@ function prefetch(root: string, file: string, args: string[]): void {
 
 function publish(root: string, file: string, args: string[]): void {
   requireCurrentLock(root, file);
-  const lockfile = readLock(file)!;
+  const packages = lockedPackages(root, readBunLock(root));
   let name: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -158,12 +160,12 @@ function publish(root: string, file: string, args: string[]): void {
     // The package of the working directory.
     const path = relative(root, process.cwd());
     name =
-      lockfile.packages.find((p) => p.path === path)?.name ??
-      fail(`no package of ${basename(file)} is at ${path || "the project root"}; name one with --package.`);
+      packages.find((p) => p.path === path)?.name ??
+      fail(`no package of bun.lock is at ${path || "the project root"}; name one with --package.`);
   }
   const pkg =
-    lockfile.packages.find((p) => p.name === name && p.version) ??
-    fail(`${basename(file)} has no package named ${name} with a version.`);
+    packages.find((p) => p.name === name && p.version) ??
+    fail(`bun.lock has no package named ${name} with a version.`);
   const out = nixBuild(root, [
     "--argstr",
     "src",
@@ -188,8 +190,14 @@ try {
   const [file, args] = takeLockfile(root, argv);
   switch (command) {
     case "lock": {
-      const wrote = lock(root, file, { force: args.includes("--force"), bun: process.execPath });
-      console.error(wrote ? `bun-purifier: wrote ${file}` : `bun-purifier: ${basename(file)} is current.`);
+      const outcome = lock(root, file, { force: args.includes("--force"), bun: process.execPath });
+      console.error(
+        outcome === "wrote"
+          ? `bun-purifier: wrote ${file}`
+          : outcome === "current"
+            ? `bun-purifier: ${basename(file)} is current.`
+            : "bun-purifier: bun.lock records everything the Nix build needs, so there is no lockfile to write.",
+      );
       break;
     }
     case "prefetch":

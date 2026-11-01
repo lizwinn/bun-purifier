@@ -5,16 +5,18 @@ the Nix sandbox from their lockfiles. It is one of the
 [nix-purifiers](https://nix-purifiers.github.io), and it meets their
 [contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
-bun still resolves the project and writes `bun.lock`. bun-purifier adds a
-second lockfile, `bun-purifier.lock.json`, that tells Nix where bun keeps
-each package in its install cache. Nix then fetches every package, lays
-out the cache and runs `bun install --offline` in the sandbox. Nothing
-generated in Nix needs to be committed.
+bun still resolves the project and writes `bun.lock`, and Nix reads
+`bun.lock` itself: every package with its URL and integrity hash. Nix
+then fetches every package, lays out bun's install cache and runs
+`bun install --offline` in the sandbox. For the few facts `bun.lock`
+cannot hold, bun-purifier writes `bun-purifier.lock.json`, and a project
+that needs none of them has no such file. Nothing generated in Nix needs
+to be committed.
 
 ## Quickstart
 
-Lock the project in its root directory, and commit
-`bun-purifier.lock.json`:
+Lock the project in its root directory with the command below. If the
+lock writes `bun-purifier.lock.json`, commit it.
 
 ```zsh
 nix run github:nix-purifiers/bun-purifier -- lock
@@ -55,7 +57,7 @@ Build it with the builder in the flake's library:
   `release.<name>.tarball` is the path of the file.
 - `fetches`: the download entries of the shared
   [purifier](https://github.com/nix-purifiers/purifier) library that the
-  build fetches on this system.
+  lock lists, for both systems, as `readLock` gives them.
 
 Nix knows every one of these attributes, by name, at evaluation time. The
 lockfile lists the project's packages with their names, versions,
@@ -82,36 +84,50 @@ build rewrites those lines to a `node` that is that bun.
 
 ### How the lock is made
 
-`bun.lock` names every downloaded package with its URL and integrity
-hash, and the lockfile takes both from there. What `bun.lock` leaves out
-is the name of each package's entry in bun's install cache, and an
-offline install finds a package only under that name. bun derives some of
-these names with hashes of its own, for prerelease versions and for
-tarball URLs.
+`bun.lock` names every downloaded package with its URL, its integrity
+hash and npm's platform filters. bun writes it as JSON with trailing
+commas, and Nix reads it after dropping those commas. Each package
+becomes a download entry of the shared library: an archive entry for a
+tarball, a git entry for a git checkout. The library fetches and unpacks
+the entries, and decides from the platform filters which ones a system
+installs. Nix also derives the name of each package's entry in bun's
+install cache, because an offline install finds a package only under
+that name.
 
-`bun-purifier lock` therefore copies the project to a temporary directory
-and installs it into an empty cache once for each system the
-nix-purifiers build for, x86_64-linux and aarch64-linux. It reads the
-name of every cache entry and pairs it with the package's URL and hash.
-A package bun installs on neither system, such as esbuild's binary for
-macOS or a dependency of a WebAssembly fallback, stays out of the
-lockfile. Each package is a download entry of the shared library: an
-archive entry for a tarball, a git entry for a git checkout. The library
-fetches and unpacks the entries, and decides with npm's `os`, `cpu` and
-`libc` filters which ones a system installs.
+`bun-purifier lock` records what Nix cannot derive. It copies the project
+to a temporary directory and installs it into an empty cache once for
+each system the nix-purifiers build for, x86_64-linux and aarch64-linux,
+and compares what bun did with what Nix derives. The lockfile records:
 
-The lockfile holds a format `version`, a digest of `bun.lock` and the
-package manifests, and a digest of its own content. `bun-purifier lock`
-relocks only when `bun.lock` or a manifest changed, or with `--force`,
-and a relock of an unchanged project writes the same file byte for byte.
-Every command takes `--lockfile <path>` for a lockfile kept elsewhere.
+| Field | Why `bun.lock` cannot supply it |
+|---|---|
+| `cachePaths` | bun names prerelease versions and tarball URLs with hashes of its own. |
+| `gitHashes` | `bun.lock` records the commit of a git dependency, not a hash of the checkout. |
+| `notInstalled` | Which packages bun installs on neither system, such as a dependency of a WebAssembly fallback, follows from resolution. |
+| `defaultRegistry` | The default registry can come from the environment or from configuration in the home directory. |
+| `bunLockHash`, `bunVersion` | They tie the facts to one `bun.lock` and to the bun whose rules name cache entries. |
+
+The lockfile also holds a format `version` and a digest of its own
+content. When none of the facts applies, the lock writes no lockfile.
+`bun-purifier lock` relocks only when `bun.lock` changed, or with
+`--force`, and a relock of an unchanged project writes the same file byte
+for byte, or again none. Every command takes `--lockfile <path>` for a
+lockfile kept elsewhere.
+
+`lib.bun-purifier.readLock { src, root ? "", lockFile ? null, bunLock ? null }`
+reads both lockfiles into the shape every nix-purifier gives:
+`{ purifier, entries, outputs, problems }`. An entry that only some of
+the systems install carries `systems`. The builder checks this lock with
+`checkLock` of the shared library and fetches the entries of its system.
 
 ## Everyday loop
 
 The everyday loop is bun's own: `bun install`, `bun run build`,
 `bun test`. Add or upgrade a dependency with `bun add`, which updates
-`bun.lock` over the network, then run `bun-purifier lock`, which takes a
-few seconds for a project of a few hundred packages.
+`bun.lock` over the network. A project without `bun-purifier.lock.json`
+needs nothing more, since Nix reads the new package from `bun.lock`. A
+project with one runs `bun-purifier lock`, which takes a few seconds for
+a project of a few hundred packages.
 
 `bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
 `bun-purifier lock`, and so does the Nix build.
