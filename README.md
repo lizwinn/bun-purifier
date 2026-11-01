@@ -59,9 +59,9 @@ Build it with the builder in the flake's library:
   [purifier](https://github.com/nix-purifiers/purifier) library that the
   lock lists, for both systems, as `readLock` gives them.
 
-Nix knows every one of these attributes, by name, at evaluation time. The
-lockfile lists the project's packages with their names, versions,
-directories and `bin` fields, and Nix reads it as JSON.
+Nix knows every one of these attributes, by name, at evaluation time.
+`bun.lock` lists the project's packages with their directories, and Nix
+reads the name, version and `bin` field of each from its `package.json`.
 
 `nix/lib/build-bun-project.nix` documents the other arguments:
 
@@ -208,8 +208,9 @@ Every kind of dependency `bun.lock` records builds, except one:
   are part of the source, and bun installs them from there. When one lies
   outside the project, pass the directory above both as `src` and the
   project's place in it as `root`.
-- **Per-platform optional packages**, such as esbuild's binaries. The
-  lockfile holds the package of each system the nix-purifiers build for.
+- **Per-platform optional packages**, such as esbuild's binaries. Each
+  system the nix-purifiers build for fetches the packages whose platform
+  filters admit it.
 - **`link:` dependencies are refused, because they cannot work.**
   `link:<name>` names a package that `bun link` registered in bun's global
   directory on one machine, and `bun.lock` records only the name. Neither
@@ -254,7 +255,8 @@ its source in `tests/external`, and the lockfile of elysia in
 `conformance-*` checks of the contract among them. `tests/cli.sh` runs
 what needs the network or Nix itself. It relocks every fixture, updates a
 fixture that pins an old version, runs `prefetch` and then the everyday
-loop with the network cut, publishes, and runs `nix build --rebuild`. CI runs both on x86_64-linux and aarch64-linux.
+loop with the network cut, publishes, and runs `nix build --rebuild`. CI
+runs both on x86_64-linux and aarch64-linux.
 
 ## Credits
 
