@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
 # The bun install cache of a lockfile for one Nix system. Each artifact
-# the system installs is unpacked into a store path of its own, and the
+# the system installs is unpacked or checked out into a store path of its
+# own, and the
 # cache links each one at its cache path, the directory name bun gives
 # the package (`kleur@4.1.5@@@1`). A store path per package lets projects
 # that lock the same package share it.
@@ -16,10 +17,13 @@
   runCommand,
   gnutar,
   gzip,
+  # Fetches the git entries. It is called with the arguments of nixpkgs'
+  # fetchgit, so a replacement with credentials takes the same ones.
+  fetchgit,
   lockFile,
   # The Nix system whose packages the cache holds.
   system,
-  # Replaces the built-in fetcher; see fetch.nix.
+  # Replaces the built-in fetcher of archives; see fetch.nix.
   fetchurl ? null,
 }:
 let
@@ -48,13 +52,37 @@ let
           --no-same-owner --no-same-permissions
         chmod -R u+rwX,go+rX $out
       '';
+
+  # bun keeps a git dependency as the checkout of its commit, with the
+  # commit in a file `.bun-tag`, and an offline install looks for that
+  # file.
+  checkout =
+    artifact:
+    runCommand (lock.artifactName artifact)
+      {
+        src = fetchgit {
+          name = lock.artifactName artifact + "-source";
+          inherit (artifact.git) url rev;
+          inherit (artifact) hash;
+          fetchSubmodules = artifact.git.submodules;
+        };
+        inherit (artifact.git) rev;
+        preferLocalBuild = true;
+      }
+      ''
+        cp -r "$src" $out
+        chmod -R u+w $out
+        printf %s "$rev" > $out/.bun-tag
+      '';
+
+  entry = artifact: if artifact ? git then checkout artifact else unpack artifact;
 in
 # The manifest goes to the builder as a file, since a large project locks
 # thousands of artifacts and the list would not fit in an environment
 # variable.
 runCommand "bun-install-cache"
   {
-    manifest = lib.concatMapStrings (a: "${a.path}\t${unpack a}\n") (lock.artifactsFor system);
+    manifest = lib.concatMapStrings (a: "${a.path}\t${entry a}\n") (lock.artifactsFor system);
     passAsFile = [ "manifest" ];
     preferLocalBuild = true;
     allowSubstitutes = false;

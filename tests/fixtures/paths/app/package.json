@@ -1,0 +1,11 @@
+{
+  "name": "fixture-paths",
+  "version": "1.0.0",
+  "bin": { "fixture-paths": "main.js" },
+  "dependencies": {
+    "is-plain-obj": "git+ssh://git@github.com/sindresorhus/is-plain-obj.git#v4.1.0",
+    "packed": "file:./vendor/packed-1.0.0.tgz",
+    "shared": "file:../shared",
+    "vendored": "file:./vendor/vendored"
+  }
+}

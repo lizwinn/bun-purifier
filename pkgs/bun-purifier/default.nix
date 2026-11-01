@@ -8,11 +8,14 @@
 # BUN_PURIFIER_LIB names nix/lib, which `install` and `publish` build
 # from, and BUN_PURIFIER_NIXPKGS names the nixpkgs of this package set,
 # which those builds import. The builds run the `nix` on the user's PATH.
+# `lock` hashes git dependencies with nix-prefetch-git, which comes with
+# the package.
 {
   lib,
   stdenvNoCC,
   makeWrapper,
   bun,
+  nix-prefetch-git,
   path,
 }:
 stdenvNoCC.mkDerivation {
@@ -36,7 +39,8 @@ stdenvNoCC.mkDerivation {
     makeWrapper ${lib.getExe bun} $out/bin/bun-purifier \
       --add-flags $out/share/bun-purifier/src/main.ts \
       --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \
-      --set BUN_PURIFIER_NIXPKGS ${path}
+      --set BUN_PURIFIER_NIXPKGS ${path} \
+      --prefix PATH : ${lib.makeBinPath [ nix-prefetch-git ]}
     runHook postInstall
   '';
 

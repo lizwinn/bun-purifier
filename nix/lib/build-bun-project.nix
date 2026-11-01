@@ -34,13 +34,22 @@
   bun,
 }:
 {
-  # The root of the bun project: the directory of bun.lock.
+  # The source tree: the bun project, the directory of bun.lock, or a
+  # directory above it that also holds the `file:` dependencies outside
+  # the project.
   src,
-  # The lockfile; the default is the one `bun-purifier lock` writes at the
+  # The project inside `src`, as a relative path; "" when `src` is the
+  # project.
+  root ? "",
+  # The lockfile; null names the one `bun-purifier lock` writes at the
   # project root.
-  lockFile ? src + "/bun-purifier.lock.json",
-  # Replaces the built-in fetcher; see fetch.nix.
+  lockFile ? null,
+  # Replaces the built-in fetcher of archives; see fetch.nix.
   fetchurl ? null,
+  # Replaces nixpkgs' fetchgit for git dependencies, for a private
+  # repository that needs credentials. It is called with the arguments of
+  # nixpkgs' fetchgit.
+  fetchgit ? null,
   # The package script that builds a package. Packages without it are
   # installed only.
   buildScript ? "build",
@@ -52,9 +61,14 @@
   srcFilter ? null,
 }:
 let
+  projectSrc = if root == "" then src else src + "/${root}";
+  # The project directory in the build and in `project`.
+  rootPrefix = if root == "" then "" else "${root}/";
+  lockPath = if lockFile != null then lockFile else projectSrc + "/bun-purifier.lock.json";
+
   lock = import ./lock.nix {
-    inherit lockFile;
-    root = src;
+    lockFile = lockPath;
+    root = projectSrc;
   };
   system = stdenvNoCC.hostPlatform.system;
 
@@ -77,10 +91,16 @@ let
   minorVersion = v: lib.versions.majorMinor v;
   checkedBun =
     lib.warnIf (minorVersion bun.version != minorVersion lock.bunVersion)
-      "bun-purifier: ${toString lockFile} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
+      "bun-purifier: ${toString lockPath} was made with bun ${lock.bunVersion}, and this build runs bun ${bun.version}. bun names its cache entries by version-specific rules; if the install fails, relock with this bun."
       bun;
 
-  cache = callPackage ./cache.nix { inherit lockFile system fetchurl; };
+  cache = callPackage ./cache.nix (
+    {
+      lockFile = lockPath;
+      inherit system fetchurl;
+    }
+    // lib.optionalAttrs (fetchgit != null) { inherit fetchgit; }
+  );
 
   # Packages with a name and a version: the ones `bun pm pack` can pack.
   namedPackages = lib.attrValues lock.packagesByName;
@@ -118,6 +138,9 @@ let
 
     configurePhase = ''
       runHook preConfigure
+      # The phases run in one shell, so the build and install phases start
+      # in the project too.
+      cd ./${rootPrefix}
       export HOME=$TMPDIR/home DO_NOT_TRACK=1
       mkdir -p $HOME
       # bun writes into its cache directory: a writable copy of the tree of
@@ -147,8 +170,19 @@ let
         mkdir -p $packs/${packDir p}
         (cd ./${p.path} && bun pm pack --ignore-scripts --quiet --destination $packs/${packDir p})
       '') namedPackages}
+      # The whole source tree, so file: dependencies outside the project
+      # come along. bun installs such a dependency as links to its files
+      # in the build directory; each link into the build directory points
+      # to the same file in $out instead.
       mkdir -p $out
-      cp -r . $out/
+      build=$NIX_BUILD_TOP/$sourceRoot
+      cp -r $build/. $out/
+      find $out -type l | while IFS= read -r link; do
+        target=$(readlink "$link")
+        case "$target" in
+          "$build"/*) ln -sfn "$out/''${target#"$build"/}" "$link" ;;
+        esac
+      done
       runHook postInstall
     '';
 
@@ -187,7 +221,9 @@ let
           lib.mapAttrsToList (bin: target: ''
             cat > $out/bin/${lib.escapeShellArg bin} <<EOF
             #!${runtimeShell}
-            exec ${checkedBun}/bin/bun ${project}/${if p.path == "" then "" else "${p.path}/"}${target} "\$@"
+            exec ${checkedBun}/bin/bun ${project}/${rootPrefix}${
+              if p.path == "" then "" else "${p.path}/"
+            }${target} "\$@"
             EOF
             chmod +x $out/bin/${lib.escapeShellArg bin}
           '') (bins p)
@@ -197,7 +233,7 @@ let
 in
 assert
   !lock.stale
-  || throw "bun-purifier: bun.lock or a package manifest under ${toString src} changed since ${toString lockFile} was made. Run `bun-purifier lock`.";
+  || throw "bun-purifier: bun.lock or a package manifest under ${toString projectSrc} changed since ${toString lockPath} was made. Run `bun-purifier lock`.";
 {
   inherit
     cache

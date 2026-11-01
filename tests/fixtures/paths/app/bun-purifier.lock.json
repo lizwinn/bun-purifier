@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "bunVersion": "1.4.2",
+  "inputsHash": "a80ad126c128ba7d6126cd86c401b783a6cfdb0ced3f4ed0df586dfe5931e36a",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-paths",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-paths": "main.js"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "@G@68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc",
+      "git": {
+        "url": "https://github.com/sindresorhus/is-plain-obj.git",
+        "rev": "68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc",
+        "submodules": false
+      },
+      "hash": "sha256-OL4jmjz7jZenq9p6i72OZTStE+G7Tzu9ACk2SYxDKlE="
+    }
+  ]
+}

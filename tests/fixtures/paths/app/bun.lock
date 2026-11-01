@@ -1,0 +1,24 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "fixture-paths",
+      "dependencies": {
+        "is-plain-obj": "git+ssh://git@github.com/sindresorhus/is-plain-obj.git#v4.1.0",
+        "packed": "file:./vendor/packed-1.0.0.tgz",
+        "shared": "file:../shared",
+        "vendored": "file:./vendor/vendored",
+      },
+    },
+  },
+  "packages": {
+    "is-plain-obj": ["is-plain-obj@git+ssh://git@github.com/sindresorhus/is-plain-obj.git#68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc", {}, "68e8cc77bb1bbd0bf7d629d3574b6ca70289b2cc"],
+
+    "packed": ["packed@./vendor/packed-1.0.0.tgz", {}, "sha512-/zX1UDS7nLDJyjvnVPrEcxTYMFTiDL0YLEsPNDfWWIlpa0dXwxoPdBdqIPgJFxfu/cRgjINmyiqoEAZErNEBRQ=="],
+
+    "shared": ["shared@file:../shared", {}],
+
+    "vendored": ["vendored@file:vendor/vendored", {}],
+  }
+}

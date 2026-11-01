@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "bunVersion": "1.4.2",
+  "inputsHash": "9721029fb8ede89453bcb9658e812c6f1c4851e6cdd9779ed9f30c474f5e1b0c",
+  "packages": [
+    {
+      "path": "",
+      "name": "fixture-registries",
+      "version": "1.0.0",
+      "bin": {
+        "fixture-registries": "main.js"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "@sindresorhus/is@4.6.0@@registry.npmmirror.com@@@1",
+      "archive": {
+        "url": "https://registry.npmmirror.com/@sindresorhus/is/-/is-4.6.0.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="
+    },
+    {
+      "path": "kleur@4.1.5@@registry.yarnpkg.com@@@1",
+      "archive": {
+        "url": "https://registry.yarnpkg.com/kleur/-/kleur-4.1.5.tgz",
+        "stripTop": true
+      },
+      "hash": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="
+    }
+  ]
+}

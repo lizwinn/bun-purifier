@@ -26,6 +26,19 @@ let
   # for the build platform.
   sources = buildBunProject { src = ./fixtures/sources; };
 
+  # Local dependencies and a git dependency: a file: directory inside the
+  # project, one outside it (so `src` is the directory above the project),
+  # a local tarball, and a git+ssh: repository, which Nix fetches over
+  # HTTPS.
+  paths = buildBunProject {
+    src = ./fixtures/paths;
+    root = "app";
+  };
+
+  # Packages from the default registry an .npmrc names and from a scoped
+  # registry.
+  registries = buildBunProject { src = ./fixtures/registries; };
+
   # Runs a program and compares its output.
   runs =
     name: program: expected:
@@ -45,6 +58,52 @@ in
   sources-program =
     runs "sources-program" sources.programs.fixture-sources
       "plain object: true, one day: 86400000 ms";
+
+  paths-program =
+    runs "paths-program" paths.programs.fixture-paths
+      "shared vendored packed plain:true";
+
+  registries-program =
+    runs "registries-program" registries.programs.fixture-registries
+      "number: true";
+
+  # `bun publish` sends the tarball Nix packed, as `bun-purifier publish`
+  # runs it, to a registry in the sandbox, which receives the package with
+  # that tarball attached.
+  publish =
+    pkgs.runCommand "test-publish"
+      {
+        nativeBuildInputs = [
+          withOverlay.bun
+          pkgs.jq
+          pkgs.coreutils
+          pkgs.diffutils
+        ];
+      }
+      ''
+        export HOME=$TMPDIR
+        tarball=$(echo ${workspace.packages.fixture-app}/*.tgz)
+        bun ${./registry.ts} 4873 request.json &
+        for i in $(seq 50); do
+          (exec 3<>/dev/tcp/127.0.0.1/4873) 2>/dev/null && break
+          sleep 0.1
+        done
+        # bun publish runs in the directory of the package, as the CLI runs
+        # it, and wants the package manifest there.
+        cp ${workspace.project}/packages/app/package.json .
+        chmod u+w package.json
+        NPM_CONFIG_TOKEN=test bun publish "$tarball" --registry http://127.0.0.1:4873/
+        wait
+        name=$(jq -r .name request.json)
+        version=$(jq -r '.versions | keys[0]' request.json)
+        if [ "$name" != fixture-app ] || [ "$version" != 1.0.0 ]; then
+          echo "published $name $version"
+          exit 1
+        fi
+        jq -r '._attachments[].data' request.json | base64 -d > sent.tgz
+        cmp sent.tgz "$tarball"
+        touch $out
+      '';
 
   # The packed app names its workspace dependency by version, as the
   # registry needs it.
@@ -73,10 +132,10 @@ in
   # manifests as nix/lib/lock.nix.
   lock-current = pkgs.runCommand "test-lock-current" { } ''
     export HOME=$TMPDIR
-    for fixture in workspace sources; do
-      cp -r ${./fixtures}/$fixture $fixture
-      chmod -R u+w $fixture
-      (cd $fixture && ${lib.getExe bun-purifier} lock) 2> out
+    cp -r ${./fixtures} fixtures
+    chmod -R u+w fixtures
+    for fixture in workspace sources paths/app registries; do
+      (cd fixtures/$fixture && ${lib.getExe bun-purifier} lock) 2> out
       grep -q "is current" out || { cat out; exit 1; }
     done
     touch $out
