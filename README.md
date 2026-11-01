@@ -40,6 +40,13 @@ nix build --impure --expr '
   (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.my-app'
 ```
 
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
+
 The flake's `overlays.default` adds one attribute to a package set: the
 scope `bun-purifier`, which holds the builder `buildBunProject` and the
 `bun-purifier` command.
