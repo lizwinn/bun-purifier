@@ -20,7 +20,8 @@
     # package overlay registry (pkg-overlays/): the package set applies it
     # by default, and the flake exports it as `pkgOverlays` and as the
     # plain `overlays.default`. The scope holds the builder, which is a
-    # function, so the `packages` output below lists the command alone.
+    # function, so the `packages` output below lists the derivations of
+    # the scope.
     nixpkgs = {
       packages.export.enabled = false;
     };
@@ -31,8 +32,7 @@
   perSystem =
     { config, pkgs, ... }:
     {
-      packages = {
-        bun-purifier = pkgs.bun-purifier.bun-purifier;
+      packages = lib.filterAttrs (_: lib.isDerivation) pkgs.bun-purifier // {
         default = config.packages.bun-purifier;
       };
     };
