@@ -4,8 +4,8 @@
 # access is the fixed-output fetches of locked packages. The checks named
 # `conformance-*` are those of the nix-purifiers contract.
 {
-  # A package set with the flake's default overlay, which adds
-  # buildBunProject.
+  # A package set with the flake's default overlay, which adds the scope
+  # `bun-purifier`, and in it buildBunProject.
   pkgs,
   # The lock reader, as the flake publishes it: lib.bun-purifier.readLock.
   readLock,
@@ -18,7 +18,7 @@
 let
   inherit (pkgs) lib;
 
-  build = pkgs.buildBunProject;
+  build = pkgs.bun-purifier.buildBunProject;
   cli = lib.getExe bun-purifier;
 
   # A workspace of two packages: a library with registry dependencies (one
@@ -44,12 +44,18 @@ let
   # registry.
   registries = build { src = ./fixtures/registries; };
 
-  # A project whose source holds neither bun.lock nor a bun-purifier
-  # lockfile: a packaging flake keeps both beside it.
+  # A project whose source holds only bun's own files, with bun.lock
+  # pinning kleur 4.1.4: a packaging flake keeps the bun-purifier lockfile
+  # beside it. `externalTool` replaces bun.lock with one outside the
+  # source, which pins kleur 4.1.5, together with its bun-purifier lockfile.
   external = build {
     src = ./external/src;
     lockFile = ./external/bun-purifier.lock.json;
-    bunLock = ./external/bun.lock;
+  };
+  externalTool = build {
+    src = ./external/src;
+    lockFile = ./external/tool/bun-purifier.lock.json;
+    bunLock = ./external/tool/bun.lock;
   };
 
   # Elysia, a bun web framework, at a pinned commit. Its build bundles with
@@ -159,14 +165,15 @@ in
   # (tests/cli.sh rebuild).
   workspace-project = projectOf workspace;
 
-  # A package written for callPackage takes the builder by name, as a
+  # A package written for callPackage takes the scope by name, as a
   # package in an overlay does, and gets the same build.
   builder-by-callpackage =
     let
       withPackage = pkgs.extend (
         final: prev: {
           example = final.callPackage (
-            { buildBunProject }: (buildBunProject { src = ./fixtures/workspace; }).packages.fixture-app
+            { bun-purifier }:
+            (bun-purifier.buildBunProject { src = ./fixtures/workspace; }).packages.fixture-app
           ) { };
         }
       );
@@ -175,16 +182,36 @@ in
     marker "builder-by-callpackage";
 
   # buildBunProject.override replaces what the builder takes from the
-  # package set: here the bun the project builds with.
+  # scope: here the bun the project builds with.
   builder-override =
     let
       markerBun = pkgs.runCommand "marker-bun" { passthru.version = pkgs.bun.version; } "mkdir $out";
-      overridden = (pkgs.buildBunProject.override { bun = markerBun; }) { src = ./fixtures/workspace; };
+      overridden = (pkgs.bun-purifier.buildBunProject.override { bun = markerBun; }) {
+        src = ./fixtures/workspace;
+      };
     in
     assert builtins.elem markerBun.drvPath (
       map (d: d.drvPath) (projectOf overridden).nativeBuildInputs
     );
     marker "builder-override";
+
+  # bun-purifier.overrideScope replaces what everything in the scope
+  # shares: here the bun, which the builder takes by name.
+  scope-override =
+    let
+      markerBun = pkgs.runCommand "marker-bun" { passthru.version = pkgs.bun.version; } "mkdir $out";
+      overridden = pkgs.bun-purifier.overrideScope (_: _: { bun = markerBun; });
+      built = overridden.buildBunProject { src = ./fixtures/workspace; };
+    in
+    assert builtins.elem markerBun.drvPath (map (d: d.drvPath) (projectOf built).nativeBuildInputs);
+    marker "scope-override";
+
+  # The builder is an attribute of the scope `pkgs.bun-purifier`, beside
+  # the command.
+  builder-in-the-scope =
+    assert !(pkgs ? buildBunProject);
+    assert pkgs.bun-purifier ? buildBunProject && pkgs.bun-purifier ? bun-purifier;
+    marker "builder-in-the-scope";
 
   sources-program =
     runs "sources-program" sources.packages.fixture-sources.executables.fixture-sources
@@ -363,8 +390,9 @@ in
       (cd fixtures/$fixture && ${cli} lock) 2> out
       grep -q "is current" out || { cat out; exit 1; }
     done
-    cp external/bun.lock external/src/
     (cd external/src && ${cli} lock --lockfile ../bun-purifier.lock.json) 2> out
+    grep -q "is current" out || { cat out; exit 1; }
+    (cd external/src && ${cli} lock --lockfile ../tool/bun-purifier.lock.json --tool-lockfile ../tool/bun.lock) 2> out
     grep -q "is current" out || { cat out; exit 1; }
     touch $out
   '';
@@ -400,8 +428,21 @@ in
       '';
 
   # A project whose source holds no bun-purifier lockfile builds from one
-  # kept outside it, together with a bun.lock kept outside it.
+  # kept outside it, and also when bun.lock is replaced with one kept
+  # outside it. Each build fetches the kleur its bun.lock pins.
   conformance-external =
-    runs "conformance-external" external.packages.fixture-external.executables.fixture-external
-      "built from a lockfile outside its source, 60000 ms";
+    let
+      fetchesKleur = result: version: builtins.any (e: e.path == "kleur@${version}@@@1") result.fetches;
+    in
+    assert fetchesKleur external "4.1.4" && !(fetchesKleur external "4.1.5");
+    assert fetchesKleur externalTool "4.1.5" && !(fetchesKleur externalTool "4.1.4");
+    allOf "conformance-external" [
+      (runs "conformance-external-tree" external.packages.fixture-external.executables.fixture-external
+        "built from a lockfile outside its source, 60000 ms"
+      )
+      (runs "conformance-external-tool"
+        externalTool.packages.fixture-external.executables.fixture-external
+        "built from a lockfile outside its source, 60000 ms"
+      )
+    ];
 }

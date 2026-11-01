@@ -24,6 +24,15 @@
 // is made with, and sets BUN_PURIFIER_LIB to nix/lib and
 // BUN_PURIFIER_NIXPKGS to the nixpkgs the flake pins.
 //
+// An external build keeps its lockfiles outside the repository. Every
+// command then takes `--lockfile <path>` or BUN_PURIFIER_LOCKFILE for
+// bun-purifier.lock.json, and `--tool-lockfile <path>` or
+// BUN_PURIFIER_TOOL_LOCKFILE for bun.lock. With the second, each command
+// works from that bun.lock, and `lock` and `update` write bun.lock there.
+// The bun.lock in the tree is the same afterwards as before. When the
+// outside bun.lock does not exist yet, `lock` and `update` start from the
+// bun.lock in the tree.
+//
 // When BUN_PURIFIER_CACHE names an install cache Nix already built,
 // `prefetch` installs from it and builds nothing, so it needs neither Nix
 // nor the network. The offline check of the flake runs it that way in the
@@ -31,36 +40,48 @@
 
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isStale, LOCK_FILE, LockError, lock, lockedPackages, readBunLock, readLock } from "./lock";
 
 const usage = `usage:
-  bun-purifier lock [--lockfile <path>] [--force]
-  bun-purifier update [--lockfile <path>] [<package>...]
-  bun-purifier prefetch [--lockfile <path>] [bun install flags]
-  bun-purifier publish [--lockfile <path>] [--package <name>] [bun publish flags]`;
+  bun-purifier lock [--lockfile <path>] [--tool-lockfile <path>] [--force]
+  bun-purifier update [--lockfile <path>] [--tool-lockfile <path>] [<package>...]
+  bun-purifier prefetch [--lockfile <path>] [--tool-lockfile <path>] [bun install flags]
+  bun-purifier publish [--lockfile <path>] [--tool-lockfile <path>] [--package <name>] [bun publish flags]`;
 
+// A program the command ran failed with this exit code, after printing
+// its own error.
+class Exit extends Error {
+  constructor(readonly code: number) {
+    super(`exit ${code}`);
+  }
+}
+
+// The error reaches the end of the command, so the tree's bun.lock is
+// restored first (withToolLockfile).
 function fail(message: string): never {
-  console.error(`bun-purifier: ${message}`);
-  process.exit(1);
+  throw new LockError(message);
 }
 
 function env(name: string): string {
   return process.env[name] ?? fail(`${name} is not set; run bun-purifier through its Nix package.`);
 }
 
-// The project root: the nearest directory upward with a bun.lock, or for
-// `lock`, which writes bun.lock, the working directory when it holds a
-// package.json.
-function findRoot(command: string): string {
+// The project root: the nearest directory upward with a bun.lock. For
+// `lock`, which writes bun.lock, and for a bun.lock kept outside the tree,
+// it is the working directory when that holds a package.json.
+function findRoot(command: string, outsideBunLock: boolean): string {
   let dir = process.cwd();
   for (;;) {
     if (existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"))) return dir;
@@ -68,13 +89,35 @@ function findRoot(command: string): string {
     if (parent === dir) break;
     dir = parent;
   }
-  if (command === "lock" && existsSync(join(process.cwd(), "package.json"))) return process.cwd();
+  if ((command === "lock" || outsideBunLock) && existsSync(join(process.cwd(), "package.json"))) return process.cwd();
   fail("no bun.lock in this directory or above it.");
 }
 
 function run(argv: string[], cwd: string): void {
   const result = Bun.spawnSync(argv, { cwd, stdout: "inherit", stderr: "inherit", stdin: "inherit" });
-  if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+  if (result.exitCode !== 0) throw new Exit(result.exitCode ?? 1);
+}
+
+// Runs `body` with the bun.lock kept outside the tree in place of the
+// bun.lock in the tree, and restores the bun.lock in the tree afterwards,
+// also when `body` fails. With `write`, the bun.lock that `body` leaves
+// goes to the outside path.
+function withToolLockfile(root: string, outside: string | undefined, write: boolean, body: () => void): void {
+  if (outside === undefined) return body();
+  const tree = join(root, "bun.lock");
+  const saved = existsSync(tree) ? readFileSync(tree) : undefined;
+  if (existsSync(outside)) copyFileSync(outside, tree);
+  else if (!write) fail(`${outside} does not exist. Run \`bun-purifier lock --tool-lockfile ${outside}\` to write it.`);
+  try {
+    body();
+    if (write && existsSync(tree)) {
+      mkdirSync(dirname(outside), { recursive: true });
+      copyFileSync(tree, outside);
+    }
+  } finally {
+    if (saved !== undefined) writeFileSync(tree, saved);
+    else rmSync(tree, { force: true });
+  }
 }
 
 // Leaves a bun.lock that matches the package manifests as it is. A
@@ -118,21 +161,29 @@ function requireCurrentLock(root: string, file: string): void {
   }
 }
 
-// Takes `--lockfile <path>` (or `--lockfile=<path>`) out of the
-// arguments. The lockfile is bun-purifier.lock.json at the project root
-// unless the option or the BUN_PURIFIER_LOCKFILE variable names another,
-// such as one a packaging flake keeps outside the project. The dev shell
-// of that flake can set the variable, and the option takes precedence
-// over it.
-function takeLockfile(root: string, args: string[]): [file: string, rest: string[]] {
-  let file = process.env.BUN_PURIFIER_LOCKFILE ? resolve(process.env.BUN_PURIFIER_LOCKFILE) : join(root, LOCK_FILE);
+// Takes `--lockfile <path>` and `--tool-lockfile <path>` (or the forms
+// with "=") out of the arguments. Each option takes precedence over its
+// variable, BUN_PURIFIER_LOCKFILE or BUN_PURIFIER_TOOL_LOCKFILE, which the
+// dev shell of a packaging flake can set. Without either, the lockfile is
+// bun-purifier.lock.json at the project root and the bun.lock is the one
+// in the tree.
+function takeLockfiles(args: string[]): { file?: string; toolFile?: string; rest: string[] } {
+  const fromEnv = (name: string) => (process.env[name] ? resolve(process.env[name]!) : undefined);
+  let file = fromEnv("BUN_PURIFIER_LOCKFILE");
+  let toolFile = fromEnv("BUN_PURIFIER_TOOL_LOCKFILE");
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--lockfile") file = resolve(args[++i] ?? fail("--lockfile needs a path."));
-    else if (args[i].startsWith("--lockfile=")) file = resolve(args[i].slice("--lockfile=".length));
-    else rest.push(args[i]);
+    const option = args[i].split("=")[0];
+    if (option !== "--lockfile" && option !== "--tool-lockfile") {
+      rest.push(args[i]);
+      continue;
+    }
+    const value = args[i].includes("=") ? args[i].slice(option.length + 1) : args[++i];
+    const path = resolve(value ?? fail(`${option} needs a path.`));
+    if (option === "--lockfile") file = path;
+    else toolFile = path;
   }
-  return [file, rest];
+  return { file, toolFile, rest };
 }
 
 // Recreates the directories of a tree of links with default permissions,
@@ -216,8 +267,9 @@ function publish(root: string, file: string, args: string[]): void {
 
 const [command, ...argv] = process.argv.slice(2);
 try {
-  const root = command === undefined || command === "--help" ? "" : findRoot(command);
-  const [file, args] = takeLockfile(root, argv);
+  const { file: givenFile, toolFile, rest: args } = takeLockfiles(argv);
+  const root = command === undefined || command === "--help" ? "" : findRoot(command, toolFile !== undefined);
+  const file = givenFile ?? join(root, LOCK_FILE);
   const report = (outcome: "wrote" | "current" | "none") =>
     console.error(
       outcome === "wrote"
@@ -228,24 +280,32 @@ try {
     );
   switch (command) {
     case "lock":
-      completeBunLock(root);
-      report(lock(root, file, { force: args.includes("--force"), bun: process.execPath }));
+      withToolLockfile(root, toolFile, true, () => {
+        completeBunLock(root);
+        report(lock(root, file, { force: args.includes("--force"), bun: process.execPath }));
+      });
       break;
     case "update":
-      run([process.execPath, "update", ...args], root);
-      report(lock(root, file, { bun: process.execPath }));
+      withToolLockfile(root, toolFile, true, () => {
+        run([process.execPath, "update", ...args], root);
+        report(lock(root, file, { bun: process.execPath }));
+      });
       break;
     case "prefetch":
-      prefetch(root, file, args);
+      withToolLockfile(root, toolFile, false, () => prefetch(root, file, args));
       break;
     case "publish":
-      publish(root, file, args);
+      withToolLockfile(root, toolFile, false, () => publish(root, file, args));
       break;
     default:
       console.error(usage);
       process.exit(command === undefined || command === "--help" ? 0 : 2);
   }
 } catch (e) {
-  if (e instanceof LockError) fail(e.message);
+  if (e instanceof LockError) {
+    console.error(`bun-purifier: ${e.message}`);
+    process.exit(1);
+  }
+  if (e instanceof Exit) process.exit(e.code);
   throw e;
 }

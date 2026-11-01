@@ -58,13 +58,23 @@ relock() {
   for fixture in workspace sources paths/app registries outdated; do
     (cd "tests/fixtures/$fixture" && "$cli" lock --force)
   done
-  cp tests/external/bun.lock tests/external/src/
   (cd tests/external/src && "$cli" lock --force --lockfile ../bun-purifier.lock.json)
-  # BUN_PURIFIER_LOCKFILE names the same lockfile, as a dev shell sets it.
-  (cd tests/external/src && BUN_PURIFIER_LOCKFILE=../bun-purifier.lock.json "$cli" lock) 2>&1 |
-    grep -F "is current"
-  rm tests/external/src/bun.lock
+  (cd tests/external/src &&
+    "$cli" lock --force --lockfile ../tool/bun-purifier.lock.json --tool-lockfile ../tool/bun.lock)
+  # The variables name the same lockfiles, as a dev shell sets them.
+  (cd tests/external/src && BUN_PURIFIER_LOCKFILE=../tool/bun-purifier.lock.json \
+    BUN_PURIFIER_TOOL_LOCKFILE=../tool/bun.lock "$cli" lock) 2>&1 | grep -F "is current"
   git diff --exit-code -- tests/fixtures tests/external
+
+  # With an outside bun.lock that does not exist yet, the lock starts from
+  # the bun.lock in the tree, writes the outside one, and leaves the tree
+  # as it was.
+  cp -r tests/external "$work/external"
+  (cd "$work/external/src" &&
+    "$cli" lock --lockfile ../new/bun-purifier.lock.json --tool-lockfile ../new/bun.lock)
+  cmp "$work/external/new/bun.lock" tests/external/src/bun.lock
+  cmp "$work/external/src/bun.lock" tests/external/src/bun.lock
+  rm -rf tests/external/src/node_modules
 
   local jq rev
   jq=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#jq.bin')/bin/jq

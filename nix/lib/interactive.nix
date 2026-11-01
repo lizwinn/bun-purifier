@@ -34,7 +34,8 @@ let
 in
 {
   cache = import ./cache.nix { inherit lib purifier; } {
-    inherit pkgs;
+    inherit (pkgs) runCommand;
+    fetchers = { inherit pkgs; };
     entries = purifier.entriesFor system lock;
   };
 

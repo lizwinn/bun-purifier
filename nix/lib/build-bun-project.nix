@@ -5,14 +5,15 @@
 #
 # The file is a package for callPackage: the first argument set is what it
 # takes from the package set, and the result is the builder. The
-# bun-purifier overlay (`overlays.default`) adds it to the package set as
-# `buildBunProject`, so a package written for callPackage takes it like any
-# other builder:
+# bun-purifier overlay (`overlays.default`) adds the scope `bun-purifier`
+# to the package set, and the scope holds the builder as `buildBunProject`
+# (pkgs/default.nix). A package written for callPackage takes the scope:
 #
-#   { buildBunProject }: (buildBunProject { src = ./.; }).packages.app
+#   { bun-purifier }: (bun-purifier.buildBunProject { src = ./.; }).packages.app
 #
-# and `buildBunProject.override` replaces what it takes from the set, such
-# as `bun`. The builder returns
+# `bun-purifier.buildBunProject.override` replaces what the builder takes,
+# such as `bun`, and `bun-purifier.overrideScope` replaces what everything
+# in the scope shares. The builder returns
 #
 #   packages.<name>   package <name>, built: its directory in the built
 #                     project at `lib/node_modules/<name>`, and the
@@ -36,9 +37,11 @@
   # The fetchers of the download entries, unless `fetchers` replaces them.
   fetchurl,
   fetchgit,
-  # The package set that `fetchEntry` of the shared library unpacks
-  # archives with.
-  pkgs,
+  # What `fetchEntry` of the shared library unpacks archives with.
+  unzip,
+  zstd,
+  python3,
+  writeText,
   # The `purifier` library namespace of the shared nix-purifiers library.
   # The overlay passes the one of the bun-purifier flake.
   purifier,
@@ -52,15 +55,15 @@
   # project.
   root ? "",
   # The lockfile, by default the one `bun-purifier lock` writes at the
-  # project root. A packaging flake can keep it outside `src`, for a
-  # project whose author does not use bun-purifier. The lock writes no
-  # lockfile when bun.lock records everything, and the build then reads
-  # bun.lock alone.
+  # project root. The lock writes no lockfile when bun.lock records
+  # everything, and the build then reads bun.lock alone. An external
+  # build, whose flake keeps the lockfiles outside the repository, passes
+  # its copy here.
   lockFile ? (if root == "" then src else src + "/${root}") + "/bun-purifier.lock.json",
-  # The project's bun.lock, when `src` has none or holds another one; null
-  # names the one at the project root. A file given here replaces any
-  # bun.lock in `src` for the build.
-  bunLock ? null,
+  # The project's bun.lock, by default the one at the project root. An
+  # external build passes its copy here, and that copy replaces the one in
+  # `src` for the build.
+  bunLock ? (if root == "" then src else src + "/${root}") + "/bun.lock",
   # Fetchers in place of the package set's own, passed unchanged to
   # `fetchEntry` of the shared library: `fetchurl` for a registry mirror or
   # credentials, `fetchgit` for a private git repository.
@@ -80,14 +83,13 @@ let
   # The project directory in the build and in `project`.
   rootPrefix = if root == "" then "" else "${root}/";
   lockName = baseNameOf (toString lockFile);
+  # A bun.lock other than the one in `src` is copied over it in the build.
+  replacesBunLock = toString bunLock != toString (projectSrc + "/bun.lock");
 
-  lock = import ./lock.nix (
-    {
-      inherit lockFile;
-      root = projectSrc;
-    }
-    // lib.optionalAttrs (bunLock != null) { inherit bunLock; }
-  );
+  lock = import ./lock.nix {
+    inherit lockFile bunLock;
+    root = projectSrc;
+  };
   system = stdenvNoCC.hostPlatform.system;
 
   # The lock in the shape every nix-purifier gives, checked by the shared
@@ -135,9 +137,17 @@ let
   '';
 
   cache = import ./cache.nix { inherit lib purifier; } {
-    inherit pkgs;
+    inherit runCommand;
     fetchers = {
-      inherit fetchurl fetchgit;
+      inherit
+        fetchurl
+        fetchgit
+        runCommand
+        unzip
+        zstd
+        python3
+        writeText
+        ;
     }
     // fetchers;
     entries = purifier.entriesFor system checkedLock;
@@ -202,7 +212,7 @@ let
       cd ./${rootPrefix}
       export HOME=$TMPDIR/home DO_NOT_TRACK=1
       mkdir -p $HOME
-      ${lib.optionalString (bunLock != null) ''
+      ${lib.optionalString replacesBunLock ''
         install -m 644 ${bunLock} bun.lock
       ''}
       ${installScript}

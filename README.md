@@ -15,21 +15,24 @@ to be committed.
 
 ## Quickstart
 
-Lock the project in its root directory with the command below. If the
-lock writes `bun-purifier.lock.json`, commit it.
+Lock the project in its root directory with the command below, and
+commit `bun.lock` and, if the lock wrote it, `bun-purifier.lock.json` to
+the repository. Both files lie next to `package.json`, and the builder
+finds them there.
 
 ```zsh
 nix run github:nix-purifiers/bun-purifier -- lock
 ```
 
-The flake's `overlays.default` adds `buildBunProject` to a package set,
-and a package written for `callPackage` takes it by name, like any other
-builder:
+The flake's `overlays.default` adds one attribute to a package set: the
+scope `bun-purifier`, which holds the builder `buildBunProject` and the
+`bun-purifier` command. A package written for `callPackage` takes the
+scope by name:
 
 ```nix
 # package.nix
-{ buildBunProject }:
-(buildBunProject { src = ./.; }).packages.my-app
+{ bun-purifier }:
+(bun-purifier.buildBunProject { src = ./.; }).packages.my-app
 ```
 
 ```nix
@@ -54,9 +57,11 @@ builder:
 }
 ```
 
-The builder takes what it needs from the package set, such as `bun`,
-`stdenvNoCC` and `fetchurl`, so `buildBunProject.override` replaces any
-of them. `buildBunProject { src, lockFile ? ..., fetchers ? { }, ... }`
+The builder takes what it needs from the scope and the package set, such
+as `bun`, `stdenvNoCC` and `fetchurl`. `bun-purifier.buildBunProject.override`
+replaces what the builder takes, and `bun-purifier.overrideScope`
+replaces what everything in the scope shares. The builder
+`buildBunProject { src, lockFile ? ..., bunLock ? ..., fetchers ? { }, ... }`
 returns
 
 - `packages.<name>`: package `<name>`, built: its directory in the built
@@ -80,10 +85,10 @@ reads the name, version and `bin` field of each from its `package.json`.
 
 - `root`: the project inside `src`, for `file:` dependencies outside the
   project (see Supported language repositories).
-- `lockFile` and `bunLock`: the two lockfiles, when they are not at the
-  project root. A packaging flake keeps them outside `src` to build a
-  project whose author does not use bun-purifier, and a `bunLock` given
-  here replaces any `bun.lock` in `src`.
+- `lockFile` and `bunLock`: the two lockfiles, by default the ones next
+  to `package.json` in `src`. An external build passes copies kept
+  outside the repository, and a `bunLock` given here replaces the
+  `bun.lock` in `src` for the build. See External builds.
 - `fetchers`: passed unchanged to `fetchEntry` of the shared library.
   `fetchers.fetchurl` serves a registry mirror or credentials, and
   `fetchers.fetchgit` a private git repository.
@@ -130,16 +135,39 @@ The lockfile also holds a format `version` and a digest of its own
 content. When none of the facts applies, the lock writes no lockfile.
 `bun-purifier lock` relocks only when `bun.lock` changed, or with
 `--force`, and a relock of an unchanged project writes the same file byte
-for byte, or again none. Every command takes `--lockfile <path>` for a
-lockfile kept elsewhere, or reads its path from the environment variable
-`BUN_PURIFIER_LOCKFILE`, which the dev shell of a packaging flake can
-set. `--lockfile` takes precedence over the variable.
+for byte, or again none.
 
-`lib.bun-purifier.readLock { src, root ? "", lockFile ? ..., bunLock ? null }`
-reads both lockfiles into the shape every nix-purifier gives:
-`{ purifier, entries, outputs, problems }`. An entry that only some of
+`lib.bun-purifier.readLock` takes the same `src`, `root`, `lockFile` and
+`bunLock` as the builder. It reads both lockfiles into the shape every
+nix-purifier gives, `{ purifier, entries, outputs, problems }`. An entry that only some of
 the systems install carries `systems`. The builder checks this lock with
 `checkLock` of the shared library and fetches the entries of its system.
+
+### External builds
+
+A project that does not use bun-purifier can still be built from a
+flake. The flake keeps both lockfiles outside the repository and passes
+them to the builder:
+
+```nix
+bun-purifier.buildBunProject {
+  src = project; # the source of the project, which has no bun-purifier.lock.json
+  lockFile = ./locks/bun-purifier.lock.json;
+  bunLock = ./locks/bun.lock;
+}
+```
+
+The commands take the same two paths. `--lockfile <path>` or the
+environment variable `BUN_PURIFIER_LOCKFILE` names `bun-purifier.lock.json`,
+and `--tool-lockfile <path>` or `BUN_PURIFIER_TOOL_LOCKFILE` names
+`bun.lock`. The dev shell of the flake can set both variables, so the
+commands need no flags there. An option takes precedence over its
+variable.
+
+With a `bun.lock` path, `lock` and `update` write `bun.lock` at that
+path and leave the `bun.lock` in the working tree as it is. When the file
+at that path does not exist yet, they start from the `bun.lock` in the
+working tree.
 
 ## Development loop
 
@@ -283,7 +311,7 @@ Then add a `flake.nix` that builds the package and its release tarball:
         inherit system;
         overlays = [ bun-purifier.overlays.default ];
       };
-      elysia = pkgs.buildBunProject {
+      elysia = pkgs.bun-purifier.buildBunProject {
         src = ./.;
         testScript = "test:types";
       };

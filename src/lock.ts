@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -532,7 +533,8 @@ export function lock(
       ...found,
     };
     const result: Lock = { ...content, contentHash: contentHash(content) };
-    writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file,`${JSON.stringify(result, null, 2)}\n`);
     return "wrote";
   } finally {
     rmSync(work, { recursive: true, force: true });

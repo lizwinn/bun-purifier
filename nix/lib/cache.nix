@@ -17,23 +17,24 @@
   purifier,
 }:
 {
-  pkgs,
+  runCommand,
   # The download entries the cache holds.
   entries,
-  # Fetchers in place of nixpkgs' own, passed to `fetchEntry` unchanged.
-  fetchers ? { },
+  # The fetchers and packages `fetchEntry` takes by name, passed to it
+  # unchanged.
+  fetchers,
 }:
 let
   storeName = import ./store-name.nix;
 
-  fetchEntry = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
+  fetchEntry = purifier.fetchEntry fetchers;
 
   # bun keeps a git dependency as the checkout of its commit, with the
   # commit in a file `.bun-tag`, and an offline install looks for that
   # file.
   withBunTag =
     entry:
-    pkgs.runCommand (storeName (baseNameOf entry.path))
+    runCommand (storeName (baseNameOf entry.path))
       {
         src = fetchEntry entry;
         inherit (entry.git) rev;
@@ -50,7 +51,7 @@ in
 # The manifest goes to the builder as a file, since a large project locks
 # thousands of entries and the list would not fit in an environment
 # variable.
-pkgs.runCommand "bun-install-cache"
+runCommand "bun-install-cache"
   {
     manifest = lib.concatMapStrings (e: "${e.path}\t${storePath e}\n") entries;
     passAsFile = [ "manifest" ];

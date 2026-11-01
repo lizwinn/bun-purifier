@@ -27,19 +27,17 @@
   root ? "",
   # The lockfile, by default bun-purifier.lock.json at the project root.
   lockFile ? (if root == "" then src else src + "/${root}") + "/bun-purifier.lock.json",
-  # The project's bun.lock, when it is not at the project root.
-  bunLock ? null,
+  # The project's bun.lock, by default the one at the project root. An
+  # external build passes the copy it keeps outside the repository.
+  bunLock ? (if root == "" then src else src + "/${root}") + "/bun.lock",
 }:
 let
   projectSrc = if root == "" then src else src + "/${root}";
 
-  lock = import ./lock.nix (
-    {
-      inherit lockFile;
-      root = projectSrc;
-    }
-    // lib.optionalAttrs (bunLock != null) { inherit bunLock; }
-  );
+  lock = import ./lock.nix {
+    inherit lockFile bunLock;
+    root = projectSrc;
+  };
 
   # The systems the nix-purifiers build for.
   systems = [

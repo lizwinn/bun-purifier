@@ -1,11 +1,11 @@
 {
   "version": 3,
   "bunVersion": "1.4.2",
-  "bunLockHash": "0ef3d4c3a58a52bf51696865602b4633898970c1296e36ef184111e11f376971",
+  "bunLockHash": "e76a0ed6efb884631097fd771afdde4b12ec97f4e9cb449cf5031913fb9028da",
   "cachePaths": {
     "ms": "ms@3.0.0-684001923c4f8651@@@1"
   },
   "gitHashes": {},
   "notInstalled": [],
-  "contentHash": "09c45310f0ac5521863988c939d1476610bfbcd66c4d12c176669a85ef92ffdd"
+  "contentHash": "074156a829ac11095efc49d8d747a1f2a850c775178339b246a095c1dc810c63"
 }
