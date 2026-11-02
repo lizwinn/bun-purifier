@@ -51,9 +51,11 @@ To move every dependency, or the named ones, to the newest versions
 their ranges allow, run
 
 ```zsh
-nix run github:nix-purifiers/bun-purifier -- update \
-  [<package>...]
+nix shell 'github:nix-purifiers/bun-purifier'
+bun-purifier update
 ```
+
+Pass package names to `bun-purifier update` to update only those packages.
 
 `update` runs `bun update`, which rewrites `bun.lock`, and then locks
 against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
@@ -236,7 +238,8 @@ purifier from that package set or pass a compatible toolchain to the builder.
 ## Working offline
 
 ```zsh
-nix run github:nix-purifiers/bun-purifier -- prefetch
+nix shell 'github:nix-purifiers/bun-purifier'
+bun-purifier prefetch
 ```
 
 `prefetch` builds, in the Nix store, every package `bun.lock` lists for
@@ -336,7 +339,8 @@ projects.
 In a checkout of it, lock the project:
 
 ```zsh
-nix run github:nix-purifiers/bun-purifier -- lock
+nix shell 'github:nix-purifiers/bun-purifier'
+bun-purifier lock
 ```
 
 elysia has optional dependencies that only a WebAssembly fallback
