@@ -382,9 +382,5 @@ packages from npm and the sandbox has no network.
 
 ## Credits
 
-bun-purifier follows the design of
-[sbt-nix-backend](https://github.com/clhodapp/sbt-nix-backend): the build
-tool keeps resolving and planning the build, a lockfile records every
-download, and Nix fetches those downloads and builds offline. The
-nix-purifiers were inspired by nixcloud's
+The purifier idea was inspired by nixcloud's
 [cargo (libnix)](https://github.com/nixcloud/cargo).
