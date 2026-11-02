@@ -66,7 +66,8 @@ To move every dependency, or the named ones, to the newest versions
 their ranges allow, run
 
 ```zsh
-nix run github:nix-purifiers/bun-purifier -- update [<package>...]
+nix run github:nix-purifiers/bun-purifier -- update \
+  [<package>...]
 ```
 
 `update` runs `bun update`, which rewrites `bun.lock`, and then locks
@@ -95,7 +96,8 @@ flake can live in the project's repository or in another one:
   inputs.bun-purifier.url = "github:nix-purifiers/bun-purifier";
   inputs.nixpkgs.follows = "bun-purifier/nixpkgs";
 
-  outputs = { nixpkgs, bun-purifier, ... }:
+  outputs =
+    { nixpkgs, bun-purifier, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -228,15 +230,15 @@ For an ad hoc build, the builder can also be evaluated directly from the
 project root. Replace the example package name with one from your project:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.my-app'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.bun-purifier.buildBunProject { src = ./.; })
+.packages.my-app'
 ```
 
 This uses the purifier's pinned nixpkgs, matching the lock command above.
@@ -359,15 +361,15 @@ installs, so the lock writes `bun-purifier.lock.json`. Commit it next to
 Then build it from the checkout. This runs elysia's own `build` script:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.bun-purifier.buildBunProject { src = ./.; }).packages.elysia'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/bun-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.bun-purifier.buildBunProject { src = ./.; })
+.packages.elysia'
 ```
 
 The builder returns more than the package. Name `release.elysia` in
