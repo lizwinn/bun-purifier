@@ -5,8 +5,6 @@ Nix-resolved dependencies. Use the normal build and test commands in your
 working tree; building the project itself in the Nix sandbox is an
 optional next step.
 
-It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
-
 bun still resolves the project and writes `bun.lock`, and Nix reads
 `bun.lock` itself: every package with its URL and integrity hash. Nix
 then fetches every package, lays out bun's install cache and runs
