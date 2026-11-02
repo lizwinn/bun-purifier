@@ -80,7 +80,8 @@ flake can live in the project's repository or in another one:
 
 ```nix
 {
-  inputs.bun-purifier.url = "github:nix-purifiers/bun-purifier";
+  inputs.bun-purifier.url =
+    "github:nix-purifiers/bun-purifier";
   inputs.nixpkgs.follows = "bun-purifier/nixpkgs";
 
   outputs =
@@ -91,10 +92,13 @@ flake can live in the project's repository or in another one:
         inherit system;
         overlays = [ bun-purifier.overlays.default ];
       };
-      project = pkgs.bun-purifier.buildBunProject { src = ./.; };
+      project = pkgs.bun-purifier.buildBunProject {
+        src = ./.;
+      };
     in
     {
-      packages.${system}.default = project.packages.my-app;
+      packages.${system}.default =
+        project.packages.my-app;
     };
 }
 ```
@@ -193,7 +197,9 @@ them to the builder:
 
 ```nix
 bun-purifier.buildBunProject {
-  src = project; # the source of the project, which has no bun-purifier.lock.json
+  # the source of the project, which has no
+  # bun-purifier.lock.json
+  src = project;
   lockFile = ./locks/bun-purifier.lock.json;
   bunLock = ./locks/bun.lock;
 }
