@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='bun-native-composition-') as temporary:
     run(cli,'prefetch')
     run(cli.parent/'bun','install','--frozen-lockfile')
     run(cli.parent/'bun','run','test')
-    run(sdk/'bin/bun','run','test')
+    run(sdk/'bin/bun','-e','const odd=require("@fixture/lib");if(!odd(3)||odd(4))process.exit(1)')
     assert (project/'package.json').read_bytes() == original
     assert before == (lockfile.read_bytes(), (project/'bun.lock').read_bytes())
     expression = temporary/'consumer.nix'
