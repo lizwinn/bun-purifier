@@ -30,12 +30,19 @@
   # The project's bun.lock, by default the one at the project root. An
   # external build passes the copy it keeps outside the repository.
   bunLock ? (if root == "" then src else src + "/${root}") + "/bun.lock",
+  providedNames ? [ ],
+  providedVersions ? [ ],
 }:
 let
   projectSrc = if root == "" then src else src + "/${root}";
 
   lock = import ./lock.nix {
-    inherit lockFile bunLock;
+    inherit
+      lockFile
+      bunLock
+      providedNames
+      providedVersions
+      ;
     root = projectSrc;
   };
 

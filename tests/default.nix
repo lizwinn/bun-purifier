@@ -137,6 +137,23 @@ let
   allOf = name: checks: pkgs.runCommand "test-${name}" { inherit checks; } "touch $out";
 in
 {
+  composition-producer = workspace.packages."@fixture/lib";
+  npm-projection =
+    pkgs.runCommand "bun-npm-projection-check"
+      {
+        nativeBuildInputs = [
+          pkgs.nodejs
+          pkgs.python3
+        ];
+      }
+      ''
+        export HOME="$TMPDIR/home"
+        mkdir -p "$HOME"
+        python ${./npm-projection.py} ${workspace.packages."@fixture/lib".projections.npm} \
+          ${workspace.packages."@fixture/lib".projections.npm.catalog} ${pkgs.nodejs}/bin
+        touch "$out"
+      '';
+
   # The unit tests of the lock (tests/unit).
   unit =
     pkgs.runCommand "test-unit"

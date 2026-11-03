@@ -15,6 +15,7 @@
   stdenvNoCC,
   makeWrapper,
   bun,
+  python3,
   nix-prefetch-git,
   path,
 }:
@@ -43,6 +44,16 @@ stdenvNoCC.mkDerivation {
       --add-flags $out/share/bun-purifier/src/main.ts \
       --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \
       --set BUN_PURIFIER_NIXPKGS ${path} \
+      --set BUN_PURIFIER_PYTHON ${lib.getExe python3} \
+      --set BUN_PURIFIER_PROJECT_INPUTS ${lib.purifier.projectInputsTool} \
+      --prefix PATH : ${lib.makeBinPath [ nix-prefetch-git ]}
+    makeWrapper ${lib.getExe bun} $out/bin/bun \
+      --add-flags $out/share/bun-purifier/src/main.ts \
+      --set BUN_PURIFIER_TOOL_WRAPPER 1 \
+      --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \
+      --set BUN_PURIFIER_NIXPKGS ${path} \
+      --set BUN_PURIFIER_PYTHON ${lib.getExe python3} \
+      --set BUN_PURIFIER_PROJECT_INPUTS ${lib.purifier.projectInputsTool} \
       --prefix PATH : ${lib.makeBinPath [ nix-prefetch-git ]}
     runHook postInstall
   '';

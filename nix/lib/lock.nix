@@ -34,6 +34,8 @@
   root,
   # The project's bun.lock, which may lie outside `root`.
   bunLock ? root + "/bun.lock",
+  providedNames ? [ ],
+  providedVersions ? [ ],
 }:
 let
   supportedVersion = import ./lock-version.nix;
@@ -147,7 +149,15 @@ let
       };
       github = builtins.match "github:([^/]+)/([^#]+)#(.+)" resolution;
     in
-    if builtins.match "(workspace|root):.*" resolution != null || isLocal resolution then
+    if
+      builtins.elem name providedNames
+      || builtins.elem {
+        inherit name;
+        version = resolution;
+      } providedVersions
+    then
+      null
+    else if builtins.match "(workspace|root):.*" resolution != null || isLocal resolution then
       null
     else if hasPrefix "link:" resolution then
       {

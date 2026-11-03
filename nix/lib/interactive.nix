@@ -17,6 +17,7 @@
   lockFile,
   # A package name, for `release`.
   package ? null,
+  projectInputs ? "[]",
 }:
 let
   pkgs = import nixpkgs { inherit system; };
@@ -33,11 +34,41 @@ let
   };
 in
 {
+  npmInputs =
+    let
+      repository = purifier.npmInstallRepository {
+        dependencies = purifier.lockedProjectInputs {
+          inputs = builtins.fromJSON projectInputs;
+          inherit system;
+        };
+        inherit (pkgs) runCommand python3;
+      };
+    in
+    [
+      repository
+      repository.metadata
+    ];
+
   cache = import ./cache.nix { inherit lib purifier; } {
     inherit (pkgs) runCommand;
     fetchers = { inherit pkgs; };
     entries = purifier.entriesFor system lock;
   };
+
+  npmPublication =
+    let
+      buildBunProject = pkgs.callPackage ./build-bun-project.nix { inherit purifier; };
+      build = buildBunProject {
+        src = /. + src;
+        lockFile = /. + lockFile;
+      };
+      repository = build.packages.${package}.projections.npm;
+    in
+    pkgs.runCommand "bun-npm-publication" { } ''
+      mkdir -p "$out"
+      cp -rs ${repository}/. "$out/"
+      ln -s ${repository.catalog} "$out/catalog.json"
+    '';
 
   release =
     let

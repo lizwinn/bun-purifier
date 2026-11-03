@@ -68,6 +68,7 @@ export type Lock = Facts & {
   bunVersion: string;
   bunLockHash: string;
   contentHash: string;
+  projectInputs?: unknown[];
 };
 
 export type LockedPackage = {
@@ -286,8 +287,8 @@ export function outsidePaths(bunLock: BunLock): string[] {
 
 // Copies the project, and each `file:` dependency outside it at the same
 // place relative to it, into `work`. Returns the copy of the project.
-function copyProject(root: string, bunLock: BunLock, work: string): string {
-  const outside = outsidePaths(bunLock).map((p) => resolve(root, p));
+export function copyProject(root: string, bunLock: BunLock, work: string): string {
+  const outside = outsidePaths(bunLock).map((p) => resolve(root, p)).filter((p) => !p.startsWith("/nix/store/"));
   // The deepest directory that holds the project and every outside path.
   let anchor = root;
   while (outside.some((p) => relative(anchor, p).startsWith(".."))) anchor = dirname(anchor);
@@ -510,19 +511,19 @@ export function isStale(root: string, lock: Lock | undefined): boolean {
 export function lock(
   root: string,
   file: string,
-  options: { force?: boolean; bun: string },
+  options: { force?: boolean; bun: string; projectInputs?: unknown[] },
 ): "wrote" | "current" | "none" {
   const bunLock = readBunLock(root);
   // --force rewrites a lockfile that cannot be read, which is what the
   // errors of readLock tell the user to run.
   if (!options.force) {
     const current = readLock(file);
-    if (current !== undefined && !isStale(root, current)) return "current";
+    if (current !== undefined && !isStale(root, current) && canonicalJson(current.projectInputs ?? []) === canonicalJson(options.projectInputs ?? [])) return "current";
   }
   const work = lockRun(root, bunLock, options.bun);
   try {
     const found = facts(root, bunLock, observe(join(work, "cache")));
-    if (!hasFacts(found)) {
+    if (!hasFacts(found) && !options.projectInputs?.length) {
       rmSync(file, { force: true });
       return "none";
     }
@@ -531,6 +532,7 @@ export function lock(
       bunVersion: Bun.version,
       bunLockHash: bunLockHash(root),
       ...found,
+      ...(options.projectInputs?.length ? { projectInputs: options.projectInputs } : {}),
     };
     const result: Lock = { ...content, contentHash: contentHash(content) };
     mkdirSync(dirname(file), { recursive: true });

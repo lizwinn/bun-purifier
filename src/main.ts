@@ -52,11 +52,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { withBoundNpmLock, withNpmInputs, type Repository } from "./npm-inputs";
 import { isStale, LOCK_FILE, LockError, lock, lockedPackages, readBunLock, readLock } from "./lock";
 
 const usage = `usage:
-  bun-purifier lock [--lockfile <path>] [--tool-lockfile <path>] [--force]
-  bun-purifier update [--lockfile <path>] [--tool-lockfile <path>] [<package>...]
+  bun-purifier lock [--input <Nix producer>] [--lockfile <path>] [--tool-lockfile <path>] [--force]
+  bun-purifier update [--input <Nix producer>] [--lockfile <path>] [--tool-lockfile <path>] [<package>...]
   bun-purifier prefetch [--lockfile <path>] [--tool-lockfile <path>] [bun install flags]
   bun-purifier publish [--lockfile <path>] [--tool-lockfile <path>] [--package <name>] [bun publish flags]`;
 
@@ -90,6 +91,7 @@ function findRoot(command: string, outsideBunLock: boolean): string {
     dir = parent;
   }
   if ((command === "lock" || outsideBunLock) && existsSync(join(process.cwd(), "package.json"))) return process.cwd();
+  if (command === "tool") return "";
   fail("no bun.lock in this directory or above it.");
 }
 
@@ -209,7 +211,7 @@ function makeRemovable(dir: string): void {
   for (const name of readdirSync(dir)) makeRemovable(join(dir, name));
 }
 
-function prefetch(root: string, file: string, args: string[]): void {
+function prefetch(root: string, file: string, args: string[], views: Repository[] = []): void {
   requireCurrentLock(root, file);
   // The Nix build's result link is a GC root, so the cache stays in the
   // store while the project uses it.
@@ -224,10 +226,11 @@ function prefetch(root: string, file: string, args: string[]): void {
   makeRemovable(writable);
   rmSync(writable, { recursive: true, force: true });
   linkTree(cache, writable);
-  run([process.execPath, "install", "--frozen-lockfile", "--offline", `--cache-dir=${writable}`, ...args], root);
+  withBoundNpmLock(root, views, () =>
+    run([process.execPath, "install", "--frozen-lockfile", "--offline", `--cache-dir=${writable}`, ...args], root));
 }
 
-function publish(root: string, file: string, args: string[]): void {
+function publish(root: string, file: string, args: string[], composed = false): void {
   requireCurrentLock(root, file);
   const packages = lockedPackages(root, readBunLock(root));
   let name: string | undefined;
@@ -257,18 +260,64 @@ function publish(root: string, file: string, args: string[]): void {
     "--argstr",
     "package",
     name!,
-    "release",
+    composed ? "npmPublication" : "release",
   ]);
+  if (composed) {
+    const modules = JSON.parse(readFileSync(join(out, "catalog.json"), "utf8")).modules;
+    const options = rest.some(arg => arg === "--tag" || arg.startsWith("--tag=")) ? rest : ["--tag", "nix", ...rest];
+    const registryOptions: string[] = [];
+    for (let index = 0; index < rest.length; index++) {
+      if (["--registry", "--config", "--ca", "--cafile"].includes(rest[index])) registryOptions.push(rest[index], rest[++index]);
+      else if (/^--(registry|config|ca|cafile)=/.test(rest[index])) registryOptions.push(rest[index]);
+    }
+    for (const item of modules.sort((a: { primary: boolean; name: string }, b: { primary: boolean; name: string }) => Number(a.primary) - Number(b.primary) || a.name.localeCompare(b.name))) {
+      if (!item.primary) {
+        const lookupOptions = [...registryOptions];
+        if (!lookupOptions.some(arg => arg === "--registry" || arg.startsWith("--registry=")) && item.package.publishConfig?.registry)
+          lookupOptions.push("--registry", item.package.publishConfig.registry);
+        const existing = Bun.spawnSync([process.execPath, "info", `${item.name}@${item.version}`, "dist.integrity", "--json", "--no-cache", ...lookupOptions], {
+          cwd: join(root, pkg.path), stdout: "pipe", stderr: "ignore",
+        });
+        if (existing.exitCode === 0) {
+          const integrity = JSON.parse(existing.stdout.toString() || "null");
+          if (integrity === item.integrity) continue;
+          if (integrity != null) fail(`registry artifact differs from Nix input: ${item.name}@${item.version}`);
+        }
+      }
+      run([process.execPath, "publish", join(out, item.archive), ...options], join(root, pkg.path));
+    }
+    return;
+  }
   const tarball = readdirSync(out).find((f) => f.endsWith(".tgz")) ?? fail(`the build of ${name} made no tarball.`);
   // bun publish runs in the directory of the package, so it reads the
   // registry configuration there, as it does for a package it packs.
   run([process.execPath, "publish", join(out, tarball), ...rest], join(root, pkg.path));
 }
 
-const [command, ...argv] = process.argv.slice(2);
+const toolWrapper = process.env.BUN_PURIFIER_TOOL_WRAPPER === "1";
+delete process.env.BUN_PURIFIER_TOOL_WRAPPER;
+const [command, ...argv] = toolWrapper ? ["tool", ...process.argv.slice(2)] : process.argv.slice(2);
 try {
-  const { file: givenFile, toolFile, rest: args } = takeLockfiles(argv);
+  const references: string[] = [];
+  const remaining: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    if (!toolWrapper && argv[index] === "--input") {
+      if (!argv[index + 1]) fail("--input needs a Nix producer reference");
+      references.push(argv[++index]);
+    } else remaining.push(argv[index]);
+  }
+  const { file: givenFile, toolFile, rest: args } = takeLockfiles(toolWrapper ? [] : remaining);
+  if (toolWrapper) args.push(...remaining);
   const root = command === undefined || command === "--help" ? "" : findRoot(command, toolFile !== undefined);
+  if (toolWrapper && !root) {
+    console.error("bun-purifier: no lockfile; using ordinary, impure Bun resolution.");
+    run([process.execPath, ...args], process.cwd());
+    process.exit(0);
+  }
+  if (command === undefined || command === "--help") {
+    console.error(usage);
+    process.exit(0);
+  }
   const file = givenFile ?? join(root, LOCK_FILE);
   const report = (outcome: "wrote" | "current" | "none") =>
     console.error(
@@ -278,29 +327,64 @@ try {
           ? `bun-purifier: ${basename(file)} is current.`
           : "bun-purifier: bun.lock records everything the Nix build needs, so there is no lockfile to write.",
     );
+  let previousInputs: unknown[] = [];
+  if (file && existsSync(file)) {
+    try { previousInputs = readLock(file)?.projectInputs ?? []; }
+    catch (error) {
+      if (!(command === "lock" && args.includes("--force"))) throw error;
+    }
+  }
+  let context: { projectInputs: unknown[]; views: { repository: string; catalog: string }[] } = { projectInputs: [], views: [] };
+  if (references.length || previousInputs.length) {
+    const result = Bun.spawnSync([
+      env("BUN_PURIFIER_PYTHON"), join(import.meta.dir, "project-inputs.py"),
+      file, join(root, "node_modules/.cache/bun-purifier/inputs"),
+      JSON.stringify(references.length ? references : null), String(command === "update"),
+    ], { stdout: "pipe", stderr: "inherit" });
+    if (result.exitCode !== 0) throw new Exit(result.exitCode ?? 1);
+    context = JSON.parse(result.stdout.toString());
+  }
+  const mutatingTool = toolWrapper && ["add", "remove", "rm", "update"].includes(args[0]);
+  withNpmInputs(root, command === "publish" ? [] : context.views, () => {
   switch (command) {
+    case "tool":
+      if (mutatingTool) {
+        withToolLockfile(root, toolFile, true, () => {
+          run([process.execPath, ...args], process.cwd());
+          report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs }));
+        });
+      } else if (args[0] === "install" || args[0] === "i") {
+        withToolLockfile(root, toolFile, false, () => prefetch(root, file, args.slice(1), context.views));
+      } else {
+        withToolLockfile(root, toolFile, false, () => {
+          if (["run", "test", "build", "x"].includes(args[0])) prefetch(root, file, [], context.views);
+          run([process.execPath, ...args], process.cwd());
+        });
+      }
+      break;
     case "lock":
       withToolLockfile(root, toolFile, true, () => {
         completeBunLock(root);
-        report(lock(root, file, { force: args.includes("--force"), bun: process.execPath }));
+        report(lock(root, file, { force: args.includes("--force"), bun: process.execPath, projectInputs: context.projectInputs }));
       });
       break;
     case "update":
       withToolLockfile(root, toolFile, true, () => {
         run([process.execPath, "update", ...args], root);
-        report(lock(root, file, { bun: process.execPath }));
+        report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs }));
       });
       break;
     case "prefetch":
-      withToolLockfile(root, toolFile, false, () => prefetch(root, file, args));
+      withToolLockfile(root, toolFile, false, () => prefetch(root, file, args, context.views));
       break;
     case "publish":
-      withToolLockfile(root, toolFile, false, () => publish(root, file, args));
+      withToolLockfile(root, toolFile, false, () => publish(root, file, args, context.projectInputs.length > 0));
       break;
     default:
       console.error(usage);
-      process.exit(command === undefined || command === "--help" ? 0 : 2);
+      throw new Exit(2);
   }
+  }, mutatingTool);
 } catch (e) {
   if (e instanceof LockError) {
     console.error(`bun-purifier: ${e.message}`);

@@ -39,13 +39,11 @@ For persistent use, add these packages through your usual Nix configuration.
 
 ## Development loop
 
-The development loop is bun's own: `bun install`, `bun run build`,
-`bun test`. Add or upgrade a dependency with `bun add`, which updates
-`bun.lock` over the network. A project without `bun-purifier.lock.json`
-needs nothing more, since Nix reads the new package from `bun.lock`. A
-project with one runs `bun-purifier lock` again. After an edit of a
-`package.json` by hand, `bun-purifier lock` brings `bun.lock` up to date
-as well.
+`nix shell` supplies a `bun` wrapper. `bun install`, `bun run build`
+and `bun test` use the Nix-resolved dependencies. `bun add`, `bun remove`
+and `bun update` update the native lock and record any additional facts
+Nix needs. After editing `package.json` by hand, run `bun-purifier lock`.
+Without a lockfile, the wrapper warns and runs ordinary, impure Bun.
 
 To move every dependency, or the named ones, to the newest versions
 their ranges allow, run
@@ -62,6 +60,32 @@ against the new `bun.lock`. `lock` keeps the versions `bun.lock` has.
 
 `bun-purifier prefetch` refuses a lockfile older than `bun.lock` and names
 `bun-purifier lock`, and so does the Nix build.
+
+## Dependencies from other purified projects
+
+Pass a producer's Nix output when locking:
+
+```zsh
+nix shell 'github:nix-purifiers/bun-purifier'
+bun-purifier lock --input 'github:example/library#library'
+bun install
+bun test
+```
+
+The producer can use Bun, npm or pnpm. Nix supplies its artifact identities
+and overrides ordinary version requests automatically. `projectInputs`
+pins the Nix sources; supplied artifacts have no download entries.
+
+The builder accepts these outputs through `dependencies = [ library ];`
+and exports `projections.npm`. Individual `packages.<name>` and
+`release.<name>` also export `projections.npm` with that package's runtime
+dependencies. A build uses its recorded `projectInputs` by default.
+
+For a composed project, `bun-purifier publish` publishes the namespaced
+archives and their exact dependency requirements, using the `nix` tag by
+default. Ordinary package managers can consume the result. An already
+published dependency is reused only when its integrity matches the Nix
+input.
 
 ## Building the project with Nix
 

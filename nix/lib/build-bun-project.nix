@@ -41,6 +41,8 @@
   unzip,
   zstd,
   python3,
+  nodejs,
+  nix,
   writeText,
   # The `purifier` library namespace of the shared nix-purifiers library.
   # The overlay passes the one of the bun-purifier flake.
@@ -68,6 +70,11 @@
   # `fetchEntry` of the shared library: `fetchurl` for a registry mirror or
   # credentials, `fetchgit` for a private git repository.
   fetchers ? { },
+  dependencies ? purifier.lockedProjectInputs {
+    inputs =
+      if builtins.pathExists lockFile then (lib.importJSON lockFile).projectInputs or [ ] else [ ];
+    system = stdenvNoCC.hostPlatform.system;
+  },
   # The package script that builds a package. Packages without it are
   # installed only.
   buildScript ? "build",
@@ -86,23 +93,35 @@ let
   # A bun.lock other than the one in `src` is copied over it in the build.
   replacesBunLock = toString bunLock != toString (projectSrc + "/bun.lock");
 
-  lock = import ./lock.nix {
-    inherit lockFile bunLock;
-    root = projectSrc;
+  inputSelection = purifier.npmInputSelection { inherit dependencies; };
+  supplied = {
+    providedNames = inputSelection.names;
+    providedVersions = inputSelection.versions;
   };
+
+  lock = import ./lock.nix (
+    {
+      inherit lockFile bunLock;
+      root = projectSrc;
+    }
+    // supplied
+  );
   system = stdenvNoCC.hostPlatform.system;
 
   # The lock in the shape every nix-purifier gives, checked by the shared
   # library, which fails evaluation with its problems.
   checkedLock = purifier.checkLock (
-    import ./read-lock.nix { inherit lib purifier; } {
-      inherit
-        src
-        root
-        lockFile
-        bunLock
-        ;
-    }
+    import ./read-lock.nix { inherit lib purifier; } (
+      {
+        inherit
+          src
+          root
+          lockFile
+          bunLock
+          ;
+      }
+      // supplied
+    )
   );
 
   defaultSrcFilter =
@@ -156,10 +175,18 @@ let
   # The offline install, run in the project directory. bun writes into its
   # cache directory, so it gets a writable copy of the tree of links to the
   # unpacked packages.
+  inputRepository = purifier.npmInstallRepository {
+    inherit dependencies runCommand python3;
+  };
+
   installScript = ''
     cp -r --no-dereference ${cache} $TMPDIR/bun-cache
     chmod -R u+w $TMPDIR/bun-cache
-    bun install --frozen-lockfile --offline --no-progress \
+    ${
+      lib.optionalString (dependencies != [ ]) ''
+        bun ${../../src}/install-inputs.ts "$PWD" ${inputRepository.catalog} ${inputRepository} \
+      ''
+    }bun install --frozen-lockfile --offline --no-progress \
       --cache-dir=$TMPDIR/bun-cache --backend=copyfile || {
       echo "bun-purifier: bun could not install offline from the packages of ${lockName}. The lockfile lacks a package that bun.lock needs; run \`bun-purifier lock --force\` and commit the result." >&2
       exit 1
@@ -228,6 +255,7 @@ let
 
     installPhase = ''
       runHook preInstall
+      mkdir -p "$packs"
       ${lib.concatMapStrings (p: ''
         mkdir -p $packs/${packDir p}
         (cd ./${p.path} && bun pm pack --ignore-scripts --quiet --destination $packs/${packDir p})
@@ -287,6 +315,7 @@ let
           '';
     in
     lib.extendDerivation true {
+      projections = projectionFor [ p.name ];
       executables = lib.mapAttrs (bin: _: "${drv}/bin/${bin}") (bins p);
     } drv
   ) lock.packagesByName;
@@ -326,12 +355,56 @@ let
         test -e $out/${lib.escapeShellArg (packFile p)}
       '';
     in
-    lib.extendDerivation true { tarball = "${drv}/${packFile p}"; } drv
+    lib.extendDerivation true {
+      tarball = "${drv}/${packFile p}";
+      projections = projectionFor [ p.name ];
+    } drv
   ) lock.packagesByName;
+  capture =
+    runCommand "bun-runtime-graph"
+      {
+        nativeBuildInputs = [
+          nodejs
+          nix
+        ];
+        ownPackages = builtins.toJSON (
+          map (p: {
+            inherit (p) name;
+            dir = p.path;
+            archive = "${project.packs}/${packDir p}/${packFile p}";
+          }) namedPackages
+        );
+        passAsFile = [ "ownPackages" ];
+      }
+      ''
+        export NPM_PURIFIER_NPM_MODULES=${nodejs}/lib/node_modules/npm/node_modules
+        export NPM_PROJECTION_NIX=${nix}/bin/nix
+        node ${purifier.npmCaptureTool} ${project}/${rootPrefix} ${project.packs} "$out" "$ownPackagesPath"
+      '';
+  projectionFor =
+    roots:
+    purifier.npmProjections {
+      graph = "${capture}/graph.json";
+      archives = "${capture}/archives";
+      producer = project;
+      inherit
+        roots
+        dependencies
+        runCommand
+        python3
+        ;
+    };
+  projections = projectionFor null;
+
 in
 # checkLock fails evaluation with the problems of the lock, before any
 # attribute of the result is read.
 builtins.seq checkedLock {
-  inherit packages tests release;
+  inherit
+    packages
+    tests
+    release
+    projections
+    ;
   fetches = checkedLock.entries;
 }
