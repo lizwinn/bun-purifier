@@ -125,8 +125,8 @@ function withToolLockfile(root: string, outside: string | undefined, write: bool
 // Leaves a bun.lock that matches the package manifests as it is. A
 // missing, binary or incomplete one gets `bun install --lockfile-only`,
 // which keeps every resolution bun.lock records and resolves the rest.
-function completeBunLock(root: string): void {
-  if (existsSync(join(root, "bun.lock"))) {
+function completeBunLock(root: string, reconstruct = false): void {
+  if (!reconstruct && existsSync(join(root, "bun.lock"))) {
     const frozen = Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--lockfile-only", "--no-progress"], {
       cwd: root,
       stdout: "ignore",
@@ -345,13 +345,13 @@ try {
     context = JSON.parse(result.stdout.toString());
   }
   const mutatingTool = toolWrapper && ["add", "remove", "rm", "update"].includes(args[0]);
-  withNpmInputs(root, command === "publish" ? [] : context.views, () => {
+  withNpmInputs(root, command === "publish" ? [] : context.views, (portableLock) => {
   switch (command) {
     case "tool":
       if (mutatingTool) {
         withToolLockfile(root, toolFile, true, () => {
           run([process.execPath, ...args], process.cwd());
-          report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs }));
+          report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs, portableLock }));
         });
       } else if (args[0] === "install" || args[0] === "i") {
         withToolLockfile(root, toolFile, false, () => prefetch(root, file, args.slice(1), context.views));
@@ -364,14 +364,14 @@ try {
       break;
     case "lock":
       withToolLockfile(root, toolFile, true, () => {
-        completeBunLock(root);
-        report(lock(root, file, { force: args.includes("--force"), bun: process.execPath, projectInputs: context.projectInputs }));
+        completeBunLock(root, context.views.length > 0);
+        report(lock(root, file, { force: args.includes("--force"), bun: process.execPath, projectInputs: context.projectInputs, portableLock }));
       });
       break;
     case "update":
       withToolLockfile(root, toolFile, true, () => {
         run([process.execPath, "update", ...args], root);
-        report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs }));
+        report(lock(root, file, { bun: process.execPath, projectInputs: context.projectInputs, portableLock }));
       });
       break;
     case "prefetch":

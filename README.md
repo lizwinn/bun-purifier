@@ -74,7 +74,8 @@ bun test
 
 The producer can use Bun, npm or pnpm. Nix supplies its artifact identities
 and overrides ordinary version requests automatically. `projectInputs`
-pins the Nix sources; supplied artifacts have no download entries.
+pins the Nix sources; supplied artifacts stay out of `bun.lock` and download
+entries. Bun receives a temporary native lock reconstructed from those inputs.
 
 The builder accepts these outputs through `dependencies = [ library ];`
 and exports `projections.npm`. Individual `packages.<name>` and

@@ -511,7 +511,7 @@ export function isStale(root: string, lock: Lock | undefined): boolean {
 export function lock(
   root: string,
   file: string,
-  options: { force?: boolean; bun: string; projectInputs?: unknown[] },
+  options: { force?: boolean; bun: string; projectInputs?: unknown[]; portableLock?: () => void },
 ): "wrote" | "current" | "none" {
   const bunLock = readBunLock(root);
   // --force rewrites a lockfile that cannot be read, which is what the
@@ -527,6 +527,7 @@ export function lock(
       rmSync(file, { force: true });
       return "none";
     }
+    options.portableLock?.();
     const content = {
       version: LOCK_VERSION,
       bunVersion: Bun.version,
