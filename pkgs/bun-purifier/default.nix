@@ -12,6 +12,7 @@
 # the package.
 {
   lib,
+  purifier,
   stdenvNoCC,
   makeWrapper,
   bun,
@@ -45,7 +46,7 @@ stdenvNoCC.mkDerivation {
       --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \
       --set BUN_PURIFIER_NIXPKGS ${path} \
       --set BUN_PURIFIER_PYTHON ${lib.getExe python3} \
-      --set BUN_PURIFIER_PROJECT_INPUTS ${lib.purifier.projectInputsTool} \
+      --set BUN_PURIFIER_PROJECT_INPUTS ${purifier.projectInputsTool} \
       --prefix PATH : ${
         lib.makeBinPath [
           bun
@@ -58,7 +59,7 @@ stdenvNoCC.mkDerivation {
       --set BUN_PURIFIER_LIB $out/share/bun-purifier/nix/lib \
       --set BUN_PURIFIER_NIXPKGS ${path} \
       --set BUN_PURIFIER_PYTHON ${lib.getExe python3} \
-      --set BUN_PURIFIER_PROJECT_INPUTS ${lib.purifier.projectInputsTool} \
+      --set BUN_PURIFIER_PROJECT_INPUTS ${purifier.projectInputsTool} \
       --prefix PATH : ${
         lib.makeBinPath [
           bun

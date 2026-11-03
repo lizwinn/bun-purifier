@@ -95,8 +95,8 @@ function findRoot(command: string, outsideBunLock: boolean): string {
   fail("no bun.lock in this directory or above it.");
 }
 
-function run(argv: string[], cwd: string): void {
-  const result = Bun.spawnSync(argv, { cwd, stdout: "inherit", stderr: "inherit", stdin: "inherit" });
+function run(argv: string[], cwd: string, setup = false): void {
+  const result = Bun.spawnSync(argv, { cwd, stdout: setup ? 2 : "inherit", stderr: "inherit", stdin: "inherit" });
   if (result.exitCode !== 0) throw new Exit(result.exitCode ?? 1);
 }
 
@@ -211,7 +211,7 @@ function makeRemovable(dir: string): void {
   for (const name of readdirSync(dir)) makeRemovable(join(dir, name));
 }
 
-function prefetch(root: string, file: string, args: string[], views: Repository[] = []): void {
+function prefetch(root: string, file: string, args: string[], views: Repository[] = [], setup = false): void {
   requireCurrentLock(root, file);
   // The Nix build's result link is a GC root, so the cache stays in the
   // store while the project uses it.
@@ -227,7 +227,7 @@ function prefetch(root: string, file: string, args: string[], views: Repository[
   rmSync(writable, { recursive: true, force: true });
   linkTree(cache, writable);
   withBoundNpmLock(root, views, () =>
-    run([process.execPath, "install", "--frozen-lockfile", "--offline", `--cache-dir=${writable}`, ...args], root));
+    run([process.execPath, "install", "--frozen-lockfile", "--offline", `--cache-dir=${writable}`, ...args], root, setup));
 }
 
 function publish(root: string, file: string, args: string[], composed = false): void {
@@ -357,7 +357,7 @@ try {
         withToolLockfile(root, toolFile, false, () => prefetch(root, file, args.slice(1), context.views));
       } else {
         withToolLockfile(root, toolFile, false, () => {
-          if (["run", "test", "build", "x"].includes(args[0])) prefetch(root, file, [], context.views);
+          if (["run", "test", "build", "x"].includes(args[0])) prefetch(root, file, [], context.views, true);
           run([process.execPath, ...args], process.cwd());
         });
       }

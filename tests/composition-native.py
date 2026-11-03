@@ -27,6 +27,7 @@ with tempfile.TemporaryDirectory(prefix='bun-native-composition-') as temporary:
     project.mkdir()
     manifest = {'name':'bun-composed','version':'1.0.0','license':'MIT','main':'index.js','dependencies':{'@fixture/lib':'>=99'},
                 'scripts':{'test':'bun -e \'const odd=require("@fixture/lib");if(!odd(3)||odd(4))process.exit(1)\''}}
+    manifest['scripts']['plain-output'] = "bun -e 'process.stdout.write(\"pure-output\")'"
     original = json.dumps(manifest).encode()
     (project/'package.json').write_bytes(original)
     (project/'index.js').write_text('module.exports = require("@fixture/lib");\n')
@@ -44,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix='bun-native-composition-') as temporary:
     run(cli,'prefetch')
     run(cli.parent/'bun','install','--frozen-lockfile')
     run(cli.parent/'bun','run','test')
+    output = run(cli.parent/'bun','run','plain-output',capture_output=True,text=True)
+    assert output.stdout == 'pure-output'
     run(sdk/'bin/bun','-e','const odd=require("@fixture/lib");if(!odd(3)||odd(4))process.exit(1)')
     assert (project/'package.json').read_bytes() == original
     assert before == (lockfile.read_bytes(), (project/'bun.lock').read_bytes())
@@ -52,15 +55,16 @@ with tempfile.TemporaryDirectory(prefix='bun-native-composition-') as temporary:
       let f=builtins.getFlake ("path:"+source);
           pkgs=import f.inputs.nixpkgs {system=builtins.currentSystem;overlays=[f.overlays.default];};
           result=pkgs.bun-purifier.buildBunProject {src = /. + project;};
-      in assert result.fetches == []; result.tests
+      in assert pkgs.bun-purifier.bun-purifier.drvPath != "";
+         assert result.fetches == []; result.tests
     ''')
     run('nix','build','--impure','--file',expression,'--argstr','source',snapshot,
         '--argstr','project',project,'--out-link',temporary/'pure')
     assert (project/'package.json').read_bytes() == original
     assert before == (lockfile.read_bytes(), (project/'bun.lock').read_bytes())
     publication = temporary/'publication.nix'
-    publication.write_text(expression.read_text().replace('in assert result.fetches == []; result.tests',
-        'in result.packages."bun-composed".projections.npm'))
+    publication.write_text(expression.read_text().replace('result.tests',
+        'result.packages."bun-composed".projections.npm'))
     repository = Path(subprocess.check_output(['nix','build','--impure','--file',str(publication),
         '--argstr','source',snapshot,'--argstr','project',str(project),
         '--out-link',str(temporary/'publication'),'--print-out-paths'],text=True).strip())

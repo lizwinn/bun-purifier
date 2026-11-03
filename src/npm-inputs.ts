@@ -103,7 +103,7 @@ export function withBoundNpmLock<T>(root: string, views: Repository[], body: () 
   try {
     const project = copyProject(root, readBunLock(root), work);
     const result = Bun.spawnSync([process.execPath, "install", "--lockfile-only", "--offline", "--ignore-scripts", "--no-progress"], {
-      cwd: project, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+      cwd: project, stdin: "inherit", stdout: 2, stderr: "inherit",
     });
     if (result.exitCode !== 0) throw new Error("Bun could not bind the Nix-supplied dependencies offline");
     writeFileSync(file, readFileSync(join(project, "bun.lock")));

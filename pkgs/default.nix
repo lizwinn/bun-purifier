@@ -6,7 +6,7 @@
 { callPackage, lib, ... }:
 {
   # The bun-purifier command: `lock`, `update`, `prefetch` and `publish`.
-  bun-purifier = callPackage ./bun-purifier { };
+  bun-purifier = callPackage ./bun-purifier { inherit (lib) purifier; };
 
   # The sandboxed builds of a bun project (nix/lib/build-bun-project.nix). A
   # package for callPackage in this scope, so `buildBunProject.override`
