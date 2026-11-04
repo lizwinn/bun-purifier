@@ -4,6 +4,52 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withNpmInputs } from "../../src/npm-inputs";
+import { createHash } from "node:crypto";
+import { readBunLock } from "../../src/lock";
+
+test("ordinary parent archives resolve supplied transitive dependencies offline", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-nix-transitive-"));
+  try {
+    const run = (cwd: string, ...arguments_: string[]) => {
+      const result = Bun.spawnSync([process.execPath, ...arguments_], {
+        cwd, env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(root, "cache") },
+        stdout: "pipe", stderr: "pipe",
+      });
+      if (result.exitCode) throw new Error(result.stderr.toString());
+      return result.stdout.toString();
+    };
+    for (const [name, dependencies, source] of [
+      ["provided-lib", {}, "module.exports=42;"],
+      ["ordinary-parent", { "provided-lib": ">=99" }, "module.exports=require('provided-lib');"],
+    ] as const) {
+      const directory = join(root, name);
+      mkdirSync(directory);
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ name, version: "1.0.0", main: "index.js", dependencies }));
+      writeFileSync(join(directory, "index.js"), source);
+      run(directory, "pm", "pack", "--ignore-scripts", "--filename", join(root, name + ".tgz"));
+    }
+    const archive = join(root, "ordinary-parent.tgz");
+    const originalArchive = readFileSync(archive);
+    const app = join(root, "app");
+    mkdirSync(app);
+    const manifest = JSON.stringify({ name: "consumer", dependencies: { "ordinary-parent": "file:" + archive },
+      overrides: { "provided-lib": ">=99" } });
+    writeFileSync(join(app, "package.json"), manifest);
+    const catalog = join(root, "catalog.json");
+    writeFileSync(catalog, JSON.stringify({ modules: [{ name: "provided-lib", version: "1.0.0", primary: true,
+      archive: "provided-lib.tgz", integrity: "sha512-" + createHash("sha512").update(readFileSync(join(root, "provided-lib.tgz"))).digest("base64") }] }));
+    withNpmInputs(app, [{ repository: root, catalog }], portableLock => {
+      run(app, "install", "--offline", "--ignore-scripts");
+      expect(run(app, "-e", "console.log(require('ordinary-parent'))")).toBe("42\n");
+      portableLock!();
+      const saved = readBunLock(app);
+      expect(Object.keys(saved.packages)).toEqual(["ordinary-parent"]);
+      expect((saved as any).overrides).toEqual({ "provided-lib": ">=99" });
+    });
+    expect(readFileSync(join(app, "package.json"), "utf8")).toBe(manifest);
+    expect(readFileSync(archive)).toEqual(originalArchive);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("native manifest bindings restore exact bytes when Bun fails", () => {
   const root = mkdtempSync(join(tmpdir(), "bun-nix-inputs-"));

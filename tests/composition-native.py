@@ -40,6 +40,10 @@ with tempfile.TemporaryDirectory(prefix='bun-native-composition-') as temporary:
     assert len(data['projectInputs']) == 1
     assert not data['cachePaths'] and not data['gitHashes'] and not data['notInstalled']
     before = lockfile.read_bytes(), (project/'bun.lock').read_bytes()
+    saved_native = json.loads(before[1])
+    assert saved_native['packages'] == {}, saved_native
+    assert saved_native['workspaces']['']['dependencies'] == manifest['dependencies']
+    assert b'/nix/store/' not in before[1] and b'-nix.' not in before[1]
     run(cli,'lock')
     assert before == (lockfile.read_bytes(), (project/'bun.lock').read_bytes())
     run(cli,'prefetch')

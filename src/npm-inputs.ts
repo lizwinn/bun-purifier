@@ -2,9 +2,9 @@
 // Native Bun consumes an installation view; publication keeps the original
 // namespaced archives. Manifest edits exist only during the native command.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { canonicalJson, copyProject, readBunLock } from "./lock";
+import { canonicalJson, copyProject, localPath, readBunLock, splitKey } from "./lock";
 
 type Module = {
   name: string;
@@ -15,7 +15,7 @@ type Module = {
 };
 export type Repository = { repository: string; catalog: string };
 
-export function withNpmInputs<T>(root: string, views: Repository[], body: () => T, persistChanges = false): T {
+export function withNpmInputs<T>(root: string, views: Repository[], body: (portableLock?: () => void) => T, persistChanges = false): T {
   if (views.length === 0) return body();
   const modules = new Map<string, (Module & { repository: string })[]>();
   for (const view of views) {
@@ -46,6 +46,21 @@ export function withNpmInputs<T>(root: string, views: Repository[], body: () => 
   }
   const saved = new Map<string, Buffer>();
   const bound = new Map<string, Record<string, any>>();
+  const suppliedOverrides: Record<string, string> = {};
+  for (const [name, versions] of modules) {
+    const primary = versions.filter(item => item.primary);
+    const selected = primary.length === 1 ? primary[0] : versions.length === 1 ? versions[0] : undefined;
+    if (selected) suppliedOverrides[name] = `file:${join(selected.repository, selected.archive)}`;
+  }
+  const restoreOverrides = (after: Record<string, any>, before: Record<string, any>) => {
+    for (const [name, request] of Object.entries(suppliedOverrides)) {
+      if (after.overrides?.[name] !== request) continue;
+      if (before.overrides?.[name] !== undefined) after.overrides[name] = before.overrides[name];
+      else delete after.overrides[name];
+    }
+    if (after.overrides && !Object.keys(after.overrides).length && before.overrides === undefined)
+      delete after.overrides;
+  };
   let succeeded = false;
   try {
     for (const path of paths) {
@@ -53,6 +68,10 @@ export function withNpmInputs<T>(root: string, views: Repository[], body: () => 
       const bytes = readFileSync(path);
       const manifest = JSON.parse(bytes.toString());
       let changed = false;
+      if (path === join(root, "package.json") && Object.keys(suppliedOverrides).length) {
+        manifest.overrides = { ...manifest.overrides, ...suppliedOverrides };
+        changed = true;
+      }
       for (const kind of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
         for (const [name, request] of Object.entries(manifest[kind] ?? {})) {
           if (typeof request !== "string" || request.startsWith("workspace:")) continue;
@@ -75,7 +94,32 @@ export function withNpmInputs<T>(root: string, views: Repository[], body: () => 
         writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
       }
     }
-    const result = body();
+    // Capture facts from Bun's full graph first, then save only ordinary
+    // records. The supplied graph is reconstructed from Nix for installs.
+    const result = body(() => {
+      const lock = readBunLock(root);
+      const archives = new Set([...modules.values()].flatMap(entries =>
+        entries.map(entry => resolve(entry.repository, entry.archive))));
+      for (const [key, entry] of Object.entries(lock.packages)) {
+        const archive = typeof entry[0] === "string" ? localPath(splitKey(entry[0])[1]) : undefined;
+        if (archive !== undefined && archives.has(resolve(root, archive)))
+          delete lock.packages[key];
+      }
+      for (const [workspace, metadata] of Object.entries(lock.workspaces)) {
+        const path = join(root, workspace, "package.json");
+        const original = saved.get(path);
+        if (!original) continue;
+        const before = JSON.parse(original.toString());
+        const record = metadata as Record<string, any>;
+        for (const kind of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"])
+          for (const [name, request] of Object.entries(bound.get(path)?.[kind] ?? {}))
+            if (record[kind]?.[name] === request && before[kind]?.[name] !== undefined)
+              record[kind][name] = before[kind][name];
+      }
+      const originalRoot = saved.get(join(root, "package.json"));
+      if (originalRoot) restoreOverrides(lock as unknown as Record<string, any>, JSON.parse(originalRoot.toString()));
+      writeFileSync(join(root, "bun.lock"), JSON.stringify(lock, null, 2) + "\n");
+    });
     succeeded = true;
     return result;
   } finally {
@@ -87,6 +131,7 @@ export function withNpmInputs<T>(root: string, views: Repository[], body: () => 
           for (const [name, request] of Object.entries(bound.get(path)?.[kind] ?? {}))
             if (after[kind]?.[name] === request && original[kind]?.[name] !== undefined)
               after[kind][name] = original[kind][name];
+        if (path === join(root, "package.json")) restoreOverrides(after, original);
         writeFileSync(path, canonicalJson(after) === canonicalJson(original) ? bytes : JSON.stringify(after, null, 2) + "\n");
       } else writeFileSync(path, bytes);
     }
